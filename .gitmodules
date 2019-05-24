@@ -1,6 +1,0 @@
-[submodule "util"]
-	path = util
-	url = ./util
-[submodule "utility"]
-	path = utility
-	url = ./utility
