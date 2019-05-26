@@ -1,0 +1,6 @@
+[submodule "util"]
+	path = util
+	url = http://rtx2080ti3x.edo.jaea.go.jp/intra/util.git
+[submodule "utility"]
+	path = utility
+	url = http://rtx2080ti3x.edo.jaea.go.jp/intra/utility.git

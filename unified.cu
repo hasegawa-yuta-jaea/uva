@@ -5,12 +5,12 @@
 #define GPU
 #include "utility/CUDA_SAFE_CALL.cuda.h"
 
-#include "parallel.hpp"
-#include "timer.hpp"
+#include "util/parallel.hpp"
+#include "util/timer.hpp"
 
 const int num_gpu = 3;
-const long elem = 3* 1024l* 1024l * 1024l;
-const int iter = 100;
+const long elem = 4* 1024l* 1024l * 1024l;
+const int iter = 1;
 
 __global__ void init(float *const dst, float *const src, const int k) {
   const int i = threadIdx.x + blockDim.x * blockIdx.x;
@@ -30,6 +30,8 @@ int main(int argc, char** argv) try {
   cudaMallocManaged(&src, elem * sizeof(float));
   std::cout << "total mem = " << 2l*elem*sizeof(float) / 1024/1024/1024 << " GiB" << std::endl;
   std::cout << "  per gpu = " << 2l*elem*sizeof(float) / 1024/1024/1024/num_gpu << " GiB" << std::endl;
+
+  for(long i=0; i<elem; i++) { dst[i] = src[i] = 0.f; }
   
   timer.elapse("init", [&]() {
     parallel.work([&] (int i) {
@@ -37,6 +39,10 @@ int main(int argc, char** argv) try {
       const long elem_per_gpu = elem / num_gpu;
       CUDA_SAFE_CALL_KERNEL((init<<<elem_per_gpu/1024, 1024>>>(dst + i*elem_per_gpu, src + i*elem_per_gpu, i)));
       cudaDeviceSynchronize();
+      //if(i==0) { 
+      //  cudaSetDevice(i);
+      //  CUDA_SAFE_CALL_KERNEL((init<<<elem/1024, 1024>>>(dst, src, 1)));
+      //}
     });
   });
 
