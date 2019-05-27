@@ -8,18 +8,31 @@
 #include "util/parallel.hpp"
 #include "util/timer.hpp"
 
-const int num_gpu = 3;
-const long elem = 4* 1024l* 1024l * 1024l;
+const int num_gpu = 2;
+const long elem = 1024l* 1024l * 1024l * num_gpu * 8 / 8; // weak scaling
+//const long elem = 2* 1024l* 1024l * 1024l; // strong scaling
 const int iter = 1;
 
 __global__ void init(float *const dst, float *const src, const int k) {
   const int i = threadIdx.x + blockDim.x * blockIdx.x;
-  dst[i] = src[i] = k;
+  dst[i] = src[i] = k + i;
 }
 
 __global__ void foo(float *const dst, const float *const src, const int gpu) {
   const int i = threadIdx.x + blockDim.x * blockIdx.x;
-  dst[i] = src[i] + 1.f;
+  //// stream test
+  //dst[i] = src[i] + 1.f;
+  // 2D diffusion; 5 stencil 
+  //const float c = 0.01f; 
+  //const int nx = 1024*32;
+  //dst[i] = (1.f - 4.f*c)*src[i] + 
+  //         .5f*c*(src[(i-1+elem)%elem] + 
+  //            src[(i+1)%elem] + 
+  //            src[(i-nx+elem)%elem] +
+  //            src[(i+nx+elem)%elem]);
+  // 1D diffusion; 3 stencil
+  const float c = 0.01f;
+  dst[i] = (1.f - 2.f*c)*src[i] + .5f*c*(src[(i-1+elem)%elem] + src[(i+i)%elem]);
 }
 
 int main(int argc, char** argv) try {
@@ -31,9 +44,9 @@ int main(int argc, char** argv) try {
   std::cout << "total mem = " << 2l*elem*sizeof(float) / 1024/1024/1024 << " GiB" << std::endl;
   std::cout << "  per gpu = " << 2l*elem*sizeof(float) / 1024/1024/1024/num_gpu << " GiB" << std::endl;
 
-  for(long i=0; i<elem; i++) { dst[i] = src[i] = 0.f; }
+  timer.elapse("init-cpu", [&]() { for(long i=0; i<elem; i++) { dst[i] = src[i] = 0.f; } });
   
-  timer.elapse("init", [&]() {
+  timer.elapse("init-gpu", [&]() {
     parallel.work([&] (int i) {
       cudaSetDevice(i);
       const long elem_per_gpu = elem / num_gpu;
@@ -58,8 +71,13 @@ int main(int argc, char** argv) try {
   timer.elapse("foo", [&]() {
     for(int i=0; i<iter; i++) {
       parallel.work(work);
+      float* tmp = src;
+      src = dst;
+      dst = tmp;
     }
   });
+
+  timer.elapse("final-cpu", [&]() { for(long i=0; i<elem; i++) { dst[i] = src[i] = 0.f; } });
 
   timer.showall();
   
