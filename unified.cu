@@ -6,21 +6,23 @@
 #define GPU
 #include "utility/CUDA_SAFE_CALL.cuda.h"
 
-#include "util/parallel.hpp"
 #include "util/timer.hpp"
 
-const int nth = 1024;
-const int num_gpu = 2;
-const long elem = (num_gpu *1024l*1024l*1024l /8) *8; // weak scaling in GiB
-const int iter = 100;
+const int num_gpu = 3;
+const long elem = (num_gpu *1024l*1024l*1024l /8) *4; // weak scaling in GiB
+const int iter = 1;
 
-__global__ void init(float *const dst, float *const src, const long offset) {
-  const int i = threadIdx.x + blockDim.x * blockIdx.x + offset;
-  dst[i] = src[i] = i;
+const int nth = 128;
+const long grid = elem/nth;
+const long block = nth;
+
+__global__ void init(float* dst, float* src, const int gpu) {
+  const int k = threadIdx.x + blockDim.x * (blockIdx.x + gridDim.x * gpu);
+  dst[k] = src[k] = k;
 }
 
-__global__ void foo(float *const dst, float *const src, const long offset) {
-  const int ij = threadIdx.x + blockDim.x * blockIdx.x + offset;
+__global__ void foo(float *const dst, const float *const src, const int gpu) {
+  const int ij = threadIdx.x + blockDim.x * (blockIdx.x + gridDim.x * gpu);
   //// stream test
   //// dst[ij] = src[ij] + 1.f;
   //// 2D diffusion; 5 stencil 
@@ -41,14 +43,12 @@ __global__ void foo(float *const dst, float *const src, const long offset) {
   // 1D diffusion; 3 stencil
   const float c = 0.01f;
   int im = ij - 1; im = (im <  0   ) ? elem-1 : im;
-  int ip = ij + 1; ip = (ip >= elem) ? 0 : ip;
+  int ip = ij + 1; ip = (ip >= elem) ? 0      : ip;
   dst[ij] = (1.f - 2.f*c)*src[ij] + .5f*c*(src[im] + src[ip]);
 }
 
 int main(int argc, char** argv) try {
-  util::parallel parallel(num_gpu);
   util::timer timer;
-  parallel.work([](int i) { cudaSetDevice(i); } );
   float *dst, *src;
   cudaMallocManaged(&dst, elem * sizeof(float));
   cudaMallocManaged(&src, elem * sizeof(float));
@@ -60,12 +60,15 @@ int main(int argc, char** argv) try {
   //timer.elapse("init-cpu", [&]() { for(long i=0; i<elem; i++) { dst[i] = src[i] = 0.f; } });
   
   timer.elapse("init-gpu", [&]() {
-    parallel.work([&] (int i) {
+    for(int i=0; i<num_gpu; i++) {
       cudaSetDevice(i);
-      const long elem_per_gpu = elem / num_gpu;
-      CUDA_SAFE_CALL_KERNEL((init<<<elem_per_gpu/nth, nth>>>(dst, src, i*elem_per_gpu)));
-      cudaDeviceSynchronize();
-    });
+      const long offset = i*elem/num_gpu;
+      init<<<grid/num_gpu, block>>>(dst, src, i);
+    }
+    for(int i=0; i<num_gpu; i++) {
+      cudaSetDevice(i);
+      CUDA_SAFE_CALL(cudaDeviceSynchronize());
+    }
   });
 
   std::cout << "init finished." << std::endl;
@@ -79,13 +82,17 @@ int main(int argc, char** argv) try {
 
   std::cout << "foo-init" << std::endl;
   timer.elapse("foo-init", [&]() {
-      parallel.work([&](int i) {
-        cudaSetDevice(i);
-        const long epg = elem / num_gpu;
-        const long ofs = i*epg;
-        CUDA_SAFE_CALL_KERNEL((foo<<<epg/nth, nth>>>(dst, src, ofs)));
-        cudaDeviceSynchronize();
-      });
+    for(int i=0; i<num_gpu; i++) {
+      cudaSetDevice(i);
+      const long offset = i*elem/num_gpu;
+      if(i>0) { cudaMemPrefetchAsync(src + offset-1, sizeof(float), i); }
+      if(i<num_gpu-1) { cudaMemPrefetchAsync(src, sizeof(float), i); }
+      foo<<<grid/num_gpu, block>>>(dst, src, i);
+    }
+    for(int i=0; i<num_gpu; i++) {
+      cudaSetDevice(i);
+      CUDA_SAFE_CALL(cudaDeviceSynchronize());
+    }
   });
 
   std::cout << "foo" << std::endl;
@@ -94,13 +101,17 @@ int main(int argc, char** argv) try {
       float* tmp = src;
       src = dst;
       dst = tmp;
-      parallel.work([&](int i) {
+      for(int i=0; i<num_gpu; i++) {
         cudaSetDevice(i);
-        const long epg = elem / num_gpu;
-        const long ofs = i*epg;
-        CUDA_SAFE_CALL_KERNEL((foo<<<epg/nth, nth>>>(dst, src, ofs)));
-        cudaDeviceSynchronize();
-      });
+        const long offset = i*elem/num_gpu;
+        if(i>0) { cudaMemPrefetchAsync(src + offset-1, sizeof(float), i); }
+        if(i<num_gpu-1) { cudaMemPrefetchAsync(src, sizeof(float), i); }
+        foo<<<grid/num_gpu, block>>>(dst, src, i);
+      }
+      for(int i=0; i<num_gpu; i++) {
+        cudaSetDevice(i);
+        CUDA_SAFE_CALL(cudaDeviceSynchronize());
+      }
     }
   });
 
