@@ -8,8 +8,8 @@
 
 #include "util/timer.hpp"
 
-const int num_gpu = 3;
-const long elem = (num_gpu *1024l*1024l*1024l /8) *4; // weak scaling in GiB
+const int num_gpu = 16;
+const long elem = (num_gpu *1024l*1024l*1024l /8) *2; // weak scaling in GiB
 const int iter = 1;
 
 const int nth = 128;
@@ -19,6 +19,11 @@ const long block = nth;
 __global__ void init(float* dst, float* src, const int gpu) {
   const int k = threadIdx.x + blockDim.x * (blockIdx.x + gridDim.x * gpu);
   dst[k] = src[k] = k;
+}
+
+__global__ void reinit(float* src, const float* dst, const int gpu) {
+  const int k = threadIdx.x + blockDim.x * (blockIdx.x + gridDim.x * gpu);
+  src[k] = dst[k];
 }
 
 __global__ void foo(float *const dst, const float *const src, const int gpu) {
@@ -42,8 +47,8 @@ __global__ void foo(float *const dst, const float *const src, const int gpu) {
   //                src[ip + jp*nx]);
   // 1D diffusion; 3 stencil
   const float c = 0.01f;
-  int im = ij - 1; im = (im <  0   ) ? elem-1 : im;
-  int ip = ij + 1; ip = (ip >= elem) ? 0      : ip;
+  int im = ij - 1; im = (im <  0   ) ? ij : im;
+  int ip = ij + 1; ip = (ip >= elem) ? ij : ip;
   dst[ij] = (1.f - 2.f*c)*src[ij] + .5f*c*(src[im] + src[ip]);
 }
 
@@ -54,6 +59,7 @@ int main(int argc, char** argv) try {
   cudaMallocManaged(&src, elem * sizeof(float));
   //cudaMalloc(&dst, elem * sizeof(float));
   //cudaMalloc(&src, elem * sizeof(float));
+
   std::cout << "total mem = " << 2l*elem*sizeof(float) / 1024/1024/1024 << " GiB" << std::endl;
   std::cout << "  per gpu = " << 2l*elem*sizeof(float) / 1024/1024/1024./num_gpu << " GiB" << std::endl;
 
@@ -62,7 +68,6 @@ int main(int argc, char** argv) try {
   timer.elapse("init-gpu", [&]() {
     for(int i=0; i<num_gpu; i++) {
       cudaSetDevice(i);
-      const long offset = i*elem/num_gpu;
       init<<<grid/num_gpu, block>>>(dst, src, i);
     }
     for(int i=0; i<num_gpu; i++) {
@@ -84,9 +89,9 @@ int main(int argc, char** argv) try {
   timer.elapse("foo-init", [&]() {
     for(int i=0; i<num_gpu; i++) {
       cudaSetDevice(i);
-      const long offset = i*elem/num_gpu;
-      if(i>0) { cudaMemPrefetchAsync(src + offset-1, sizeof(float), i); }
-      if(i<num_gpu-1) { cudaMemPrefetchAsync(src, sizeof(float), i); }
+      //const long offset = i*elem/num_gpu;
+      //if(i>0) { cudaMemPrefetchAsync(src + offset-1, sizeof(float), i); }
+      //if(i<num_gpu-1) { cudaMemPrefetchAsync(src, sizeof(float), i); }
       foo<<<grid/num_gpu, block>>>(dst, src, i);
     }
     for(int i=0; i<num_gpu; i++) {
@@ -98,14 +103,15 @@ int main(int argc, char** argv) try {
   std::cout << "foo" << std::endl;
   timer.elapse("foo", [&]() {
     for(int t=0; t<iter; t++) {
-      float* tmp = src;
-      src = dst;
-      dst = tmp;
+      //float* tmp = src;
+      //src = dst;
+      //dst = tmp;
       for(int i=0; i<num_gpu; i++) {
         cudaSetDevice(i);
-        const long offset = i*elem/num_gpu;
-        if(i>0) { cudaMemPrefetchAsync(src + offset-1, sizeof(float), i); }
-        if(i<num_gpu-1) { cudaMemPrefetchAsync(src, sizeof(float), i); }
+        //const long offset = i*elem/num_gpu;
+        //if(i>0) { cudaMemPrefetchAsync(src + offset-1, sizeof(float), i); }
+        //if(i<num_gpu-1) { cudaMemPrefetchAsync(src, sizeof(float), i); }
+        //reinit<<<grid/num_gpu, block>>>(src, dst, i);
         foo<<<grid/num_gpu, block>>>(dst, src, i);
       }
       for(int i=0; i<num_gpu; i++) {
