@@ -37,12 +37,15 @@ __global__ void foo(float *const dst, const float *const src, const long ofs, co
   const long idx = index(gpu);
   //// stream test
   //dst[idx] = src[idx];
-  // 1D diffusion; 3 stencil; periodic boundary
-  const float c = 0.01f;
-  const int far = 1;
-  const long im = index_boundary(idx-far, gpu);
-  const long ip = index_boundary(idx+far, gpu);
-  dst[idx] = (1.f - 2.f*c)*src[idx] + c*(src[im] + src[ip]);
+  //// 1D diffusion; 3 stencil; periodic boundary
+  //const float c = 0.01f;
+  //const long im = index_boundary(idx-1, gpu);
+  //const long ip = index_boundary(idx+1, gpu);
+  //dst[idx] = (1.f - 2.f*c)*src[idx] + c*(src[im] + src[ip]);
+  // 1D shift test
+  const long far = 1;
+  const long isx = index_boundary(idx-far);
+  dst[idx] = src[isx];
 }
 
 int main(int argc, char** argv) try {
