@@ -11,14 +11,14 @@
 #include "util/signal.hpp"
 
 const int num_gpu = 16;
-const long elem = (num_gpu *1024l*1024l*1024l /8) *32; // weak scaling in GiB
+const long elem = (num_gpu *1024l*1024l*1024l /8) *16; // weak scaling in GiB
 const int iter = 4;
 
 const int nth = 1024;
 const long grid = elem/nth;
 const long block = nth;
 
-__device__ __forceinline__ long index(const int gpu) { 
+__device__ __forceinline__ long index(const long gpu) { 
   return threadIdx.x + blockDim.x * (blockIdx.x + gridDim.x*gpu); // gridDim.x*gpu needs cudaMemAdvise() and cudaMemPrefetchAsync(), otherwise get very slow
 }
 
@@ -32,7 +32,7 @@ __device__ __forceinline__ long index_boundary(const long idx, const int gpu) {
 }
 
 __global__ void init(float* dst, float* src, const int gpu) {
-  const long k = index(gpu);
+  const long k = threadIdx.x + blockDim.x * (blockIdx.x + gridDim.x*gpu); // gridDim.x*gpu needs cudaMemAdvise() and cudaMemPrefetchAsync(), otherwise get very slow
   dst[k] = src[k] = k;
 }
 
@@ -74,25 +74,6 @@ int main(int argc, char** argv) try {
       cudaMemPrefetchAsync(src + ofs, memgpu, i);
     }
   });
-
-  if(std::numeric_limits<int>::max() < elem) { 
-    std::cerr << "warning: huge number of elems, which needs long (int will bug)" << std::endl; 
-    std::cerr << " int max = " << std::numeric_limits<int>::max() << ", #elems = " << elem << std::endl;
-  }
-
-  std::cout << "total mem = " << 2l*elem*sizeof(float) / 1024/1024/1024 << " GiB" << std::endl;
-  std::cout << "  per gpu = " << 2l*elem*sizeof(float) / 1024/1024/1024./num_gpu << " GiB" << std::endl;
-
-  std::cout << std::endl;
-  for(int i=0; i<num_gpu; i++) {
-    size_t mfree, mtotal;
-    CUDA_SAFE_CALL(cudaSetDevice(i));
-    CUDA_SAFE_CALL(cudaMemGetInfo(&mfree, &mtotal));
-    std::cout << "gpu " << std::setw(2) << std::setfill(' ') << i << ": "
-      << std::setw(4) << double(mtotal - mfree) /1024./1024./1024. << " GiB used" << std::endl;
-  }
-
-  std::cout << "step: init" << std::endl;
   timer.elapse("init-gpu", [&]() {
     for(int i=0; i<num_gpu; i++) {
       cudaSetDevice(i);
