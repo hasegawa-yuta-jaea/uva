@@ -10,93 +10,106 @@
 #include "util/timer.hpp"
 #include "util/signal.hpp"
 
-const int num_gpu = 16;
-const long elem = (num_gpu *1024l*1024l*1024l /8) *32; // weak scaling in GiB
-const int iter = 4;
+constexpr int num_gpu = 16;
+constexpr long elem = (num_gpu *1024l*1024l*1024l /8) *16; // weak scaling in GiB
+constexpr long nx = 32768;
+constexpr long ny = 32768;
+constexpr long nz = elem / nx / ny;
 
-const int nth = 1024;
-const long grid = elem/nth;
-const long block = nth;
+constexpr int iter = 4;
 
-__device__ __forceinline__ long index(const int gpu) { 
-  return threadIdx.x + blockDim.x * (blockIdx.x + gridDim.x*gpu); // gridDim.x*gpu needs cudaMemAdvise() and cudaMemPrefetchAsync(), otherwise get very slow
-}
+constexpr int nth = 1024;
+constexpr int tx = 128;
+constexpr int ty = 4;
+constexpr int tz = nth / tx / ty;
+constexpr int gx = 16;
+constexpr int gy = 1;
+constexpr int gz = num_gpu/gx/gy;
+const dim3 grid(nx/tx/gx, ny/ty/gy, nz/tz/gz);
+const dim3 block(tx, ty, tz);
 
-__device__ __forceinline__ long index_boundary(const long idx, const int gpu) {
-  //if(gpu == 0 && idx < 0) return idx + elem;
-  //else if(gpu == num_gpu-1 && idx >= elem/num_gpu) return idx - elem;
-  //else return idx;
-  if(idx < 0) return idx + elem;
-  else if(idx >= elem) return idx - elem;
-  return idx;
-}
+struct l3 { 
+  long i, j, k;
+  static __device__ __forceinline__ l3 ijk(const int& gpu) {
+    return l3 { 
+      threadIdx.x + blockIdx.x*blockDim.x + gpu*blockDim.x*gridDim.x, // x-1D domain decomposition
+      threadIdx.y + blockIdx.y*blockDim.y,
+      threadIdx.z + blockIdx.z*blockDim.z
+    };
+  }
+  static __device__ __forceinline__ long to_idx(const l3& ijk) {
+    return ijk.i + ijk.j * nx + ijk.k * nx * ny;
+  }
+  static __host__ long to_idx(const l3& g, const l3& d) {
+    const long i = d.i + g.i*nx/gz;
+    const long j = d.j + g.j*ny/gy;
+    const long k = d.k + g.k*nz/gz;
+    return i + j*nx + k*nx*ny;
+  }
+};
+
 
 __global__ void init(float* dst, float* src, const int gpu) {
-  const long k = index(gpu);
-  dst[k] = src[k] = k;
+  const long idx = l3::to_idx(l3::ijk(gpu));
+  dst[idx] = src[idx] = idx;
 }
 
 __global__ void foo(float *const dst, const float *const src, const int gpu) {
-  const long idx = index(gpu);
-  //// stream test
-  //dst[idx] = src[idx];
-  //// 1D diffusion; 3 stencil; periodic boundary
-  //const float c = 0.01f;
-  //const long im = index_boundary(idx-1, gpu);
-  //const long ip = index_boundary(idx+1, gpu);
-  //dst[idx] = (1.f - 2.f*c)*src[idx] + c*(src[im] + src[ip]);
-  // 1D shift test
-  const long far = elem/num_gpu;
-  const long isx = index_boundary(idx-far, gpu);
-  dst[idx] = src[isx];
+  const l3 ijk = l3::ijk(gpu);
+  const long& i = ijk.i;
+  const long& j = ijk.j;
+  const long& k = ijk.k;
+  const float cc = 0.1f;
+  dst[l3::to_idx(ijk)] = (1.f-6.f*cc)*src[l3::to_idx(ijk)]
+                            + cc*( src[l3::to_idx(l3 { (i-1+nx)%nx, j, k })] +
+                                   src[l3::to_idx(l3 { (i+1   )%nx, j, k })] +
+                                   src[l3::to_idx(l3 { i, (j-1+ny)%ny, k })] +
+                                   src[l3::to_idx(l3 { i, (j+1   )%ny, k })] +
+                                   src[l3::to_idx(l3 { i, j, (k-1+nz)%nz })] +
+                                   src[l3::to_idx(l3 { i, j, (k+1   )%nz })]);
 }
 
 int main(int argc, char** argv) try {
   util::timer timer;
   util::signal signal(SIGINT);
   float *dst, *src;
+  
+  std::cout << "info:" << std::endl;
+  std::cout << " total mem = " << 2l*elem*sizeof(float) / 1024/1024/1024 << " GiB" << std::endl;
+  std::cout << "   per gpu = " << 2l*elem*sizeof(float) / 1024/1024/1024./num_gpu << " GiB" << std::endl;
+  std::cout << " n = (" << nx << "," << ny << "," << nz << ")"
+            << ", gg = (" << nx/gx << "," << ny/gy << "," << nz/gz << ")" << std::endl;
 
   std::cout << "step: malloc-gpu" << std::endl;
   timer.elapse("malloc-gpu", [&]() {
     const size_t memall = elem * sizeof(float);
-    const size_t memgpu = memall / num_gpu;
     cudaMallocManaged(&dst, memall);
     cudaMallocManaged(&src, memall);
     for(int i=0; i<num_gpu; i++) {
       cudaMemAdvise(dst, memall, cudaMemAdviseSetAccessedBy, i);
       cudaMemAdvise(src, memall, cudaMemAdviseSetAccessedBy, i);
     }
-    for(int i=0; i<num_gpu; i++) {
-      const size_t ofs = elem*i/num_gpu;
-      cudaMemAdvise(dst + ofs, memgpu, cudaMemAdviseSetPreferredLocation, i);
-      cudaMemAdvise(src + ofs, memgpu, cudaMemAdviseSetPreferredLocation, i);
-      cudaMemPrefetchAsync(dst + ofs, memgpu, i);
-      cudaMemPrefetchAsync(src + ofs, memgpu, i);
+    for(int k=0; k<nz/gz; k++) for(int j=0; j<ny/gy; j++) {
+      if(j % 1024 == 0) std::cout << '.' << std::flush;
+      for(int gk=0; gk<gz; gk++) for(int gj=0; gj<gy; gj++) for(int gi=0; gi<gx; gi++) {
+        const size_t offset = l3::to_idx(l3{gi,gj,gk}, l3{0,j,k});
+        const size_t stride = nx/gx;
+        cudaMemAdvise(dst + offset, stride, cudaMemAdviseSetPreferredLocation, gi + gj*gx + gk*gx*gy);
+        cudaMemAdvise(src + offset, stride, cudaMemAdviseSetPreferredLocation, gi + gj*gx + gk*gx*gy);
+        cudaMemPrefetchAsync(dst + offset, stride, gi);
+        cudaMemPrefetchAsync(src + offset, stride, gi);
+      }
     }
+    std::cout << std::endl;
   });
 
-  if(std::numeric_limits<int>::max() < elem) { 
-    std::cerr << "warning: huge number of elems, which needs long (int will bug)" << std::endl; 
-    std::cerr << " int max = " << std::numeric_limits<int>::max() << ", #elems = " << elem << std::endl;
-  }
-
-  std::cout << "total mem = " << 2l*elem*sizeof(float) / 1024/1024/1024 << " GiB" << std::endl;
-  std::cout << "  per gpu = " << 2l*elem*sizeof(float) / 1024/1024/1024./num_gpu << " GiB" << std::endl;
 
   std::cout << std::endl;
-  for(int i=0; i<num_gpu; i++) {
-    size_t mfree, mtotal;
-    CUDA_SAFE_CALL(cudaSetDevice(i));
-    CUDA_SAFE_CALL(cudaMemGetInfo(&mfree, &mtotal));
-    std::cout << "gpu " << std::setw(2) << std::setfill(' ') << i << ": "
-      << std::setw(4) << double(mtotal - mfree) /1024./1024./1024. << " GiB used" << std::endl;
-  }
-
   std::cout << "step: init" << std::endl;
   timer.elapse("init-gpu", [&]() {
     for(int i=0; i<num_gpu; i++) {
       cudaSetDevice(i);
-      init<<<grid/num_gpu, block>>>(dst, src, i);
+      init<<<grid, block>>>(dst, src, i);
     }
     for(int i=0; i<num_gpu; i++) {
       cudaSetDevice(i);
@@ -124,7 +137,7 @@ int main(int argc, char** argv) try {
           dst = tmp;
           for(int i=0; i<num_gpu; i++) {
             cudaSetDevice(i);
-            foo<<<grid/num_gpu, block>>>(dst, src, i);
+            foo<<<grid, block>>>(dst, src, i);
           }
           for(int i=0; i<num_gpu; i++) {
             cudaSetDevice(i);
