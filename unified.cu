@@ -11,7 +11,7 @@
 #include "util/signal.hpp"
 
 const int num_gpu = 16;
-const long elem = (num_gpu *1024l*1024l*1024l /8) *32; // weak scaling in GiB
+const long elem = (num_gpu *1024l*1024l*1024l /8) *16; // weak scaling in GiB
 const int iter = 4;
 
 const int nth = 1024;
