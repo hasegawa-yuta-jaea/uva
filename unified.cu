@@ -10,45 +10,58 @@
 #include "util/timer.hpp"
 #include "util/signal.hpp"
 
-const int num_gpu = 16;
-const long elem = (num_gpu *1024l*1024l*1024l /8) *16; // weak scaling in GiB
-const int iter = 4;
+// gpu
+constexpr int num_gpu = 16;
+constexpr int gx = 4;
+constexpr int gy = 4;
+constexpr int gz = num_gpu/gx/gy;
 
-const int nth = 1024;
-const long grid = elem/nth;
-const long block = nth;
+constexpr int nth = 1024;
+constexpr int tx = 128;
+constexpr int ty = 4;
+constexpr int tz = nth/tx/ty;
 
-__device__ __forceinline__ long index(const int gpu) { 
-  return threadIdx.x + blockDim.x * (blockIdx.x + gridDim.x*gpu); // gridDim.x*gpu needs cudaMemAdvise() and cudaMemPrefetchAsync(), otherwise get very slow
-}
+// grid
+constexpr long elem = (num_gpu *1024l*1024l*1024l /8) *16; // weak scaling in GiB
+constexpr long NX = 32768;
+constexpr long NY = 32768;
+constexpr long NZ = elem/NX/NY;
+constexpr long nx = NX/gx;
+constexpr long ny = NY/gy;
+constexpr long nz = NZ/gz;
 
-__device__ __forceinline__ long index_boundary(const long idx, const int gpu) {
-  //if(gpu == 0 && idx < 0) return idx + elem;
-  //else if(gpu == num_gpu-1 && idx >= elem/num_gpu) return idx - elem;
-  //else return idx;
-  if(idx < 0) return idx + elem;
-  else if(idx >= elem) return idx - elem;
-  return idx;
-}
+constexpr int iter = 4;
 
 __global__ void init(float* dst, float* src, const int gpu) {
-  const long k = index(gpu);
+  const long k = threadIdx.x + blockIdx.x*blockDim.x + gpu*blockIdx.x*gridDim.x;
   dst[k] = src[k] = k;
 }
 
-__global__ void foo(float *const dst, const float *const src, const int gpu) {
-  const long idx = index(gpu);
-  //// stream test
-  //dst[idx] = src[idx];
-  //// 1D diffusion; 3 stencil; periodic boundary
-  //const float c = 0.01f;
-  //const long im = index_boundary(idx-1, gpu);
-  //const long ip = index_boundary(idx+1, gpu);
-  //dst[idx] = (1.f - 2.f*c)*src[idx] + c*(src[im] + src[ip]);
-  // 1D shift test
-  const long far = elem/num_gpu;
-  const long isx = index_boundary(idx-far, gpu);
-  dst[idx] = src[isx];
+__device__ __forceinline__ long idx(const int& i, const int& j, const int& k, const int& I, const int& J, const int& K) {
+  return i + nx*(j + ny*(k + nz*(I + gx*(J + gy*K))));
+}
+
+__global__ void foo(float *const dst, const float *const src, const int I, const int J, const int K) {
+  const long i = threadIdx.x + blockIdx.x*blockDim.x;
+  const long j = threadIdx.y + blockIdx.y*blockDim.y;
+  const long k = threadIdx.z + blockIdx.z*blockDim.z;
+  long im = i-1, ip = i+1, jm = j-1, jp = j+1, km = k-1, kp = k+1;
+  long IM = I, IP = I, JM = J, JP = J, KM = K, KP = K;
+  if(im < 0) { im = nx-1; IM = (I-1+gx)%gx; }
+  if(ip >= nx) { ip = 0; IP = (I+1)%gx; }
+  if(jm < 0) { jm = ny-1; JM = (J-1+gy)%gy; } 
+  if(jp >= ny) { jp = 0; JP = (J+1)%gy; }
+  if(km < 0) { km = nz-1; KM = (K-1+gz)%gz; }
+  if(kp >= nz) { kp = 0; KP = (K+1)%gz; }
+  const long ijk = idx(i, j, k, I, J, K);
+  const long je[6] = { idx(im, j, k, IM, J, K),
+                   idx(ip, j, k, JP, J, K),
+                   idx(i, jm, k, I, JM, K),
+                   idx(i, jp, k, I, JP, K),
+                   idx(i, j, km, I, J, KM),
+                   idx(i, j, kp, I, J, KP) };
+  const float cc = 0.1f;
+  dst[ijk] = (1.f-6.f*cc)*src[ijk] + cc*(src[je[0]] + src[je[1]] + src[je[2]] + src[je[3]] + src[je[4]] +src[je[5]]);
 }
 
 int main(int argc, char** argv) try {
