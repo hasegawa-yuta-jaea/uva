@@ -10,9 +10,8 @@
 #include "util/timer.hpp"
 
 //#include <numeric>
-#include <type_traits>
 namespace std {
-  template<typename T, typename U> constexpr common_type_t<T, U> gcd(const T& a, const U& b) {
+  template<typename T> constexpr T gcd(const T& a, const U& b) {
     return b==0 ? a : gcd(b, a%b);
   }
 }
