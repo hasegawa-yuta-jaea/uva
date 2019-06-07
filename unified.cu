@@ -11,21 +11,18 @@
 
 //#include <numeric>
 namespace std {
-  template<typename T> constexpr T gcd(const T& a, const U& b) {
+  template<typename T> constexpr T gcd(const T& a, const T& b) {
     return b==0 ? a : gcd(b, a%b);
   }
 }
 
-// multi-gpu
-constexpr int gx = 16;
-constexpr int gy = 1;
-constexpr int gz = 1;
-constexpr int num_gpu = gx*gy*gz;
+// partitioning
+constexpr int gx = 1, gy = 1, gz = 1, num_gpu = 1;
 
 // grid
-constexpr long nx = 1536 / gx; // if strong-scaling, devide by gx
-constexpr long ny = 1536 / gy; //                              gy 
-constexpr long nz = 1536 / gz; //                              gz
+constexpr long nx = 1536; // if strong-scaling, devide by gx
+constexpr long ny = 1536; //                              gy 
+constexpr long nz = 1536; //                              gz
 constexpr long NX = nx*gx;
 constexpr long NY = ny*gy;
 constexpr long NZ = nz*gz;
@@ -88,19 +85,8 @@ int main(int argc, char** argv) try {
   timer.elapse("malloc&init", [&]() {
     const size_t memall = elem * sizeof(float);
     const size_t memgpu = memall / num_gpu;
-    cudaMallocManaged(&dst, memall);
-    cudaMallocManaged(&src, memall);
-    for(int i=0; i<num_gpu; i++) {
-      cudaMemAdvise(dst, memall, cudaMemAdviseSetAccessedBy, i);
-      cudaMemAdvise(src, memall, cudaMemAdviseSetAccessedBy, i);
-    }
-    for(int i=0; i<num_gpu; i++) {
-      const size_t ofs = elem*i/num_gpu;
-      cudaMemAdvise(dst + ofs, memgpu, cudaMemAdviseSetPreferredLocation, i);
-      cudaMemAdvise(src + ofs, memgpu, cudaMemAdviseSetPreferredLocation, i);
-      cudaMemPrefetchAsync(dst + ofs, memgpu, i);
-      cudaMemPrefetchAsync(src + ofs, memgpu, i);
-    }
+    cudaMalloc(&dst, memall);
+    cudaMalloc(&src, memall);
     for(int i=0; i<num_gpu; i++) {
       cudaSetDevice(i);
       init<<<elem/num_gpu/nth, nth>>>(dst, src, i);

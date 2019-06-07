@@ -8,13 +8,14 @@ ifeq ("$(shell hostname)", "jdgx2")
 else
   TARGET:= $(PROG)
 endif
+endif
 
-PHONY: all r j
+.PHONY: all r j
 
 all: $(TARGET)
 
-$(PROG): unifiled.cu
-	nvcc -O2 -arch sm_70 --compiler-bindir=g++ --compiler-options="-O2 -std=c++11" unified.cu -o run
+$(PROG): unified.cu
+	nvcc -O2 -std=c++11 -arch sm_70 --compiler-bindir=g++ --compiler-options="-O2 -std=c++11" unified.cu -o run
 
 j: $(PROG)
 	qsub jd.qsub
