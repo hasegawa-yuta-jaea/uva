@@ -8,29 +8,40 @@
 #include "utility/CUDA_SAFE_CALL.cuda.h"
 
 #include "util/timer.hpp"
-#include "util/signal.hpp"
 
-// gpu
-constexpr int num_gpu = 16;
-constexpr int gx = 4;
-constexpr int gy = 4;
-constexpr int gz = num_gpu/gx/gy;
+//#include <numeric>
+#include <type_traits>
+namespace std {
+  template<typename T, typename U> constexpr common_type_t<T, U> gcd(const T& a, const U& b) {
+    return b==0 ? a : gcd(b, a%b);
+  }
+}
 
+// multi-gpu
+constexpr int gx = 16;
+constexpr int gy = 1;
+constexpr int gz = 1;
+constexpr int num_gpu = gx*gy*gz;
+
+// grid
+constexpr long nx = 1536 / gx; // if strong-scaling, devide by gx
+constexpr long ny = 1536 / gy; //                              gy 
+constexpr long nz = 1536 / gz; //                              gz
+constexpr long NX = nx*gx;
+constexpr long NY = ny*gy;
+constexpr long NZ = nz*gz;
+constexpr long elem = NX*NY*NZ;
+
+// gpu kernel
 constexpr int nth = 1024;
-constexpr int tx = 128;
+constexpr int tx = std::gcd(128l, nx);
 constexpr int ty = 4;
 constexpr int tz = nth/tx/ty;
 
-// grid
-constexpr long elem = (num_gpu *1024l*1024l*1024l /8) *16; // weak scaling in GiB
-constexpr long NX = 4096;
-constexpr long NY = 4096;
-constexpr long NZ = elem/NX/NY;
-constexpr long nx = NX/gx;
-constexpr long ny = NY/gy;
-constexpr long nz = NZ/gz;
 
+// measure
 constexpr int iter = 4;
+constexpr int iiter = 100;
 
 __global__ void init(float* dst, float* src, const int gpu) {
   const long k = threadIdx.x + blockIdx.x*blockDim.x + gpu*blockDim.x*gridDim.x;
@@ -66,11 +77,13 @@ __global__ void foo(float *const dst, const float *const src, const int I, const
 
 int main(int argc, char** argv) try {
   util::timer timer;
-  util::signal signal(SIGQUIT);
   float *dst, *src;
 
-  std::cout << "total mem = " << 2l*elem*sizeof(float) / 1024/1024/1024 << " GiB" << std::endl;
+  std::cout << "total mem = " << 2l*elem*sizeof(float) / 1024/1024/1024. << " GiB" << std::endl;
   std::cout << "  per gpu = " << 2l*elem*sizeof(float) / 1024/1024/1024./num_gpu << " GiB" << std::endl;
+  std::cout << "total mesh = (" << NX << ", " << NY << ", " << NZ << ")" << std::endl;
+  std::cout << "  partition= (" << gx << ", " << gy << ", " << gz << ")" << std::endl;
+  std::cout << "  per gpu  = (" << nx << ", " << ny << ", " << nz << ")" << std::endl;
 
   std::cout << "step: malloc&init" << std::endl;
   timer.elapse("malloc&init", [&]() {
@@ -110,7 +123,7 @@ int main(int argc, char** argv) try {
   std::cout << "step: foo (iterative)" << std::endl;
   timer.elapse("foo", [&]() {
     double bw_max = 0;
-    while(!signal) {
+    for(int tt=0; tt<iiter; tt++) {
       util::timer timer;
       timer.elapse("foo", [&]() {
         for(int t=0; t<iter; t++) {
@@ -133,7 +146,6 @@ int main(int argc, char** argv) try {
       std::cout << "bandwidth: " << bw_max << " GiB/s max, " << bw_cache << " GiB/s recent\r" << std::flush;
     }
   });
-  std::cout << std::endl << "keyboard interrupted, finish calculation" << std::endl;
 
   std::cout << std::endl;
   for(int i=0; i<num_gpu; i++) {
