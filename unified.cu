@@ -42,9 +42,14 @@ constexpr int tz = nth/tx/ty;
 constexpr int iter = 4;
 constexpr int iiter = 100;
 
-__global__ void init(float* dst, float* src, const int gpu) {
+__global__ void first_touch(float* dst, float* src, const int gpu) {
   const long k = threadIdx.x + blockIdx.x*blockDim.x + gpu*blockDim.x*gridDim.x;
   dst[k] = src[k] = k;
+}
+
+__global__ void dif1d(float* dst, const float* src, const int gpu) {
+  const long k = threadIdx.x + blockIdx.x*blockDim.x + gpu*blockDim.x*gridDim.x;
+  dst[k] = src[k] + src[(k-1+elem)%elem] + src[(k+1)%elem];
 }
 
 __device__ __forceinline__ long idx(const int& i, const int& j, const int& k, const int& I, const int& J, const int& K) {
@@ -132,7 +137,8 @@ int main(int argc, char** argv) try {
           //for(int i=0; i<num_gpu; i++) {
           for(int k=0; k<gz; k++) for(int j=0; j<gy; j++) for(int i=0; i<gx; i++) {
             cudaSetDevice(i + gx*(j + gy*k));
-            foo<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(dst, src, i,j,k);
+            //foo<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(dst, src, i,j,k);
+            dif1d<<<elem/num_gpu/nth,nth>>>(dst, src, i * gx*(j + gt*k));
           }
           for(int i=0; i<num_gpu; i++) {
             cudaSetDevice(i);

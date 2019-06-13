@@ -2,7 +2,7 @@
 #PBS -q full
 #PBS -l select=1:ncpus=96:mpiprocs=1:ompthreads=4
 #PBS -P unifiedtest
-#PBS -l walltime=00:10:00
+#PBS -l walltime=1:00:00
 #PBS -N unifiedtest
 #PBS -o ./log/
 #PBS -e ./log/
