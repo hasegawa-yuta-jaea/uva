@@ -15,7 +15,7 @@ endif
 all: $(TARGET)
 
 $(PROG): unified.cu
-	nvcc -O2 -std=c++11 -arch sm_70 --compiler-bindir=g++ --compiler-options="-O2 -std=c++11" unified.cu -o run
+	nvcc -O2 -std=c++11 -arch sm_70 unified.cu -o run
 
 j: $(PROG)
 	qsub jd.qsub
@@ -23,3 +23,5 @@ j: $(PROG)
 
 r:
 	./remote jd
+	./remote t3
+	./remote abci

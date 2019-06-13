@@ -62,13 +62,16 @@ __global__ void foo(float *const dst, const float *const src, const int I, const
   if(kp >= nz) { kp = 0; KP = (K+1)%gz; }
   const long ijk = idx(i, j, k, I, J, K);
   const long je[6] = { idx(im, j, k, IM, J, K),
-                   idx(ip, j, k, IP, J, K),
-                   idx(i, jm, k, I, JM, K),
-                   idx(i, jp, k, I, JP, K),
-                   idx(i, j, km, I, J, KM),
-                   idx(i, j, kp, I, J, KP) };
+                       idx(ip, j, k, IP, J, K),
+                       idx(i, jm, k, I, JM, K),
+                       idx(i, jp, k, I, JP, K),
+                       idx(i, j, km, I, J, KM),
+                       idx(i, j, kp, I, J, KP) };
   const float cc = 0.1f;
-  dst[ijk] = (1.f-6.f*cc)*src[ijk] + cc*(src[je[0]] + src[je[1]] + src[je[2]] + src[je[3]] + src[je[4]] +src[je[5]]);
+  // 3D diffusion
+  //dst[ijk] = (1.f-6.f*cc)*src[ijk] + cc*(src[je[0]] + src[je[1]] + src[je[2]] + src[je[3]] + src[je[4]] +src[je[5]]);
+  // 1D disffusion
+  dst[ijk] = (1.f-2.f*cc)*src[ijk] + cc*(src[je[0]] + src[je[1]]);
 }
 
 int main(int argc, char** argv) try {
