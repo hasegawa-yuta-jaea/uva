@@ -17,15 +17,15 @@ namespace std {
 }
 
 // multi-gpu
-constexpr int gx = 16;
+constexpr int gx = 1;
 constexpr int gy = 1;
 constexpr int gz = 1;
 constexpr int num_gpu = gx*gy*gz;
 
 // grid
-constexpr long nx = 1536 / gx; // if strong-scaling, devide by gx
-constexpr long ny = 1536 / gy; //                              gy 
-constexpr long nz = 1536 / gz; //                              gz
+constexpr long nx = 1024 / gx; // if strong-scaling, devide by gx
+constexpr long ny = 1024 / gy; //                              gy 
+constexpr long nz = 1024 / gz; //                              gz
 constexpr long NX = nx*gx;
 constexpr long NY = ny*gy;
 constexpr long NZ = nz*gz;
@@ -39,8 +39,8 @@ constexpr int tz = nth/tx/ty;
 
 
 // measure
-constexpr int iter = 4;
-constexpr int iiter = 100;
+constexpr int iter = 2;
+constexpr int iiter = 1;
 
 __global__ void init(float* dst, float* src, const int gpu) {
   const long k = threadIdx.x + blockIdx.x*blockDim.x + gpu*blockDim.x*gridDim.x;
