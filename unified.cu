@@ -17,30 +17,30 @@ namespace std {
 }
 
 // multi-gpu
-constexpr int gx = 16;
+constexpr int gx = 1;
 constexpr int gy = 1;
 constexpr int gz = 1;
 constexpr int num_gpu = gx*gy*gz;
 
 // grid
-constexpr long nx = 1536 / gx; // if strong-scaling, devide by gx
-constexpr long ny = 1536 / gy; //                              gy 
-constexpr long nz = 1536 / gz; //                              gz
+constexpr long nx = 1024 / gx; // if strong-scaling, devide by gx
+constexpr long ny = 1024 / gy; //                              gy 
+constexpr long nz = 1024 / gz; //                              gz
 constexpr long NX = nx*gx;
 constexpr long NY = ny*gy;
 constexpr long NZ = nz*gz;
 constexpr long elem = NX*NY*NZ;
 
 // gpu kernel
-constexpr int nth = 1024;
-constexpr int tx = std::gcd(128l, nx);
+constexpr int tx = std::gcd(256l, nx);
 constexpr int ty = 4;
-constexpr int tz = nth/tx/ty;
+constexpr int tz = 1;
+constexpr int nth = tx*ty*tz;
 
 
 // measure
-constexpr int iter = 4;
-constexpr int iiter = 100;
+constexpr int iter = 100;
+constexpr int iiter = 1;
 
 __global__ void first_touch(float* dst, float* src, const int gpu) {
   const long k = threadIdx.x + blockIdx.x*blockDim.x + gpu*blockDim.x*gridDim.x;
@@ -108,7 +108,7 @@ int main(int argc, char** argv) try {
     }
     for(int i=0; i<num_gpu; i++) {
       cudaSetDevice(i);
-      init<<<elem/num_gpu/nth, nth>>>(dst, src, i);
+      first_touch<<<elem/num_gpu/nth, nth>>>(dst, src, i);
     }
     for(int i=0; i<num_gpu; i++) {
       cudaSetDevice(i);
@@ -138,7 +138,35 @@ int main(int argc, char** argv) try {
           for(int k=0; k<gz; k++) for(int j=0; j<gy; j++) for(int i=0; i<gx; i++) {
             cudaSetDevice(i + gx*(j + gy*k));
             //foo<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(dst, src, i,j,k);
-            dif1d<<<elem/num_gpu/nth,nth>>>(dst, src, i * gx*(j + gt*k));
+            dif1d<<<elem/num_gpu/nth,nth>>>(dst, src, i * gx*(j + gy*k));
+          }
+          for(int i=0; i<num_gpu; i++) {
+            cudaSetDevice(i);
+            CUDA_SAFE_CALL(cudaDeviceSynchronize());
+          }
+        }
+      });
+      const double bw_cache = 2.* elem* sizeof(float)* iter / timer["foo"] / 1024. / 1024. / 1024.;
+      bw_max = std::max(bw_max, bw_cache);
+      std::cout << "bandwidth: " << bw_max << " GiB/s max, " << bw_cache << " GiB/s recent\r" << std::flush;
+    }
+  });
+
+  std::cout << "step: foo2 (iterative)" << std::endl;
+  timer.elapse("foo2", [&]() {
+    double bw_max = 0;
+    for(int tt=0; tt<iiter; tt++) {
+      util::timer timer;
+      timer.elapse("foo", [&]() {
+        for(int t=0; t<iter; t++) {
+          float* tmp = src;
+          src = dst;
+          dst = tmp;
+          //for(int i=0; i<num_gpu; i++) {
+          for(int k=0; k<gz; k++) for(int j=0; j<gy; j++) for(int i=0; i<gx; i++) {
+            cudaSetDevice(i + gx*(j + gy*k));
+            //foo<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(dst, src, i,j,k);
+            dif1d<<<elem/num_gpu/nth,nth>>>(dst, src, i * gx*(j + gy*k));
           }
           for(int i=0; i<num_gpu; i++) {
             cudaSetDevice(i);
