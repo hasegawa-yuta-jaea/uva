@@ -8,5 +8,6 @@ dram_read_bytes,dram_write_bytes,flop_count_sp,inst_integer\
 ,global_hit_rate\
  --events \
 global_load,global_store\
-,l2_subp0_write_sector_misses,l2_subp1_write_sector_misses,l2_subp0_read_sector_misses,l2_subp1_read_sector_misses\
+,l2_subp0_total_read_sector_queries,l2_subp1_total_read_sector_queries\
+,l2_subp0_total_write_sector_queries,l2_subp1_total_write_sector_queries\
  ./run 2>&1 | tee logprof.txt

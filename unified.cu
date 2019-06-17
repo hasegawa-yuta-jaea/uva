@@ -33,8 +33,8 @@ constexpr long elem = NX*NY*NZ;
 
 // gpu kernel
 constexpr int nth = 1024;
-constexpr int tx = std::gcd(128l, nx);
-constexpr int ty = 4;
+constexpr int tx = std::gcd(1024l, nx);
+constexpr int ty = 1;
 constexpr int tz = nth/tx/ty;
 
 
