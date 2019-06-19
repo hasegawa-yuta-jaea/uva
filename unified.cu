@@ -9,6 +9,8 @@
 
 #include "util/timer.hpp"
 
+using dim = signed int; // if >8 GB, use long
+
 //#include <numeric>
 namespace std {
   template<typename T> constexpr T gcd(const T& a, const T& b) {
@@ -23,18 +25,18 @@ constexpr int gz = 1;
 constexpr int num_gpu = gx*gy*gz;
 
 // grid
-constexpr long nx = 1024 / gx; // if strong-scaling, devide by gx
-constexpr long ny = 1024 / gy; //                              gy 
-constexpr long nz = 1024 / gz; //                              gz
-constexpr long NX = nx*gx;
-constexpr long NY = ny*gy;
-constexpr long NZ = nz*gz;
-constexpr long elem = NX*NY*NZ;
+constexpr dim nx = 1024 / gx; // if strong-scaling, devide by gx
+constexpr dim ny = 1024 / gy; //                              gy 
+constexpr dim nz = 1024 / gz; //                              gz
+constexpr dim NX = nx*gx;
+constexpr dim NY = ny*gy;
+constexpr dim NZ = nz*gz;
+constexpr dim elem = NX*NY*NZ;
 
 // gpu kernel
 constexpr int nth = 1024;
-constexpr int tx = std::gcd(1024l, nx);
-constexpr int ty = 1;
+constexpr int tx = std::gcd(dim(128l), nx);
+constexpr int ty = 4;
 constexpr int tz = nth/tx/ty;
 
 
@@ -43,35 +45,25 @@ constexpr int iter = 2;
 constexpr int iiter = 1;
 
 __global__ void init(float* dst, float* src, const int gpu) {
-  const long k = threadIdx.x + blockIdx.x*blockDim.x + gpu*blockDim.x*gridDim.x;
+  const dim k = threadIdx.x + blockIdx.x*blockDim.x;
   dst[k] = src[k] = k;
 }
 
-__device__ __forceinline__ long idx(const int& i, const int& j, const int& k, const int& I, const int& J, const int& K) {
-  return i + nx*(j + ny*(k + nz*(I + gx*(J + gy*K))));
-}
-
 __global__ void foo(float *const dst, const float *const src, const int I, const int J, const int K) {
-  const long i = threadIdx.x + blockIdx.x*blockDim.x;
-  const long j = threadIdx.y + blockIdx.y*blockDim.y;
-  const long k = threadIdx.z + blockIdx.z*blockDim.z;
-  long im = i-1, ip = i+1, jm = j-1, jp = j+1, km = k-1, kp = k+1;
-  long IM = I, IP = I, JM = J, JP = J, KM = K, KP = K;
-  if(im < 0) { im = nx-1; IM = (I-1+gx)%gx; }
-  if(ip >= nx) { ip = 0; IP = (I+1)%gx; }
-  if(jm < 0) { jm = ny-1; JM = (J-1+gy)%gy; } 
-  if(jp >= ny) { jp = 0; JP = (J+1)%gy; }
-  if(km < 0) { km = nz-1; KM = (K-1+gz)%gz; }
-  if(kp >= nz) { kp = 0; KP = (K+1)%gz; }
-  const long ijk = idx(i, j, k, I, J, K);
-  const long je[6] = { idx(im, j, k, IM, J, K),
-                   idx(ip, j, k, IP, J, K),
-                   idx(i, jm, k, I, JM, K),
-                   idx(i, jp, k, I, JP, K),
-                   idx(i, j, km, I, J, KM),
-                   idx(i, j, kp, I, J, KP) };
+  const dim i = threadIdx.x + blockIdx.x*blockDim.x;
+  const dim j = threadIdx.y + blockIdx.y*blockDim.y;
+  const dim k = threadIdx.z + blockIdx.z*blockDim.z;
+  const dim ijk = i + nx*(j + ny*k);
+  const dim im = (i-1)&(nx-1); // mod nx
+  const dim ip = (i+1)&(nx-1);
+  const dim jm = (j-1)&(ny-1);
+  const dim jp = (j+1)&(ny-1);
+  const dim km = (k-1)&(nz-1);
+  const dim kp = (k+1)&(nz-1);
   const float cc = 0.1f;
-  dst[ijk] = (1.f-6.f*cc)*src[ijk] + cc*(src[je[0]] + src[je[1]] + src[je[2]] + src[je[3]] + src[je[4]] +src[je[5]]);
+  dst[ijk] = (1.f-6.f*cc)*src[ijk] + cc*(
+    src[im + nx*(j+ny*k)] + src[ip + nx*(j+ny*k)] + src[i + (jm + ny*k)]
+    + src[i + nx*(jp + ny*k)] + src[i + nx*(j + ny*km)] +src[i + nx*(ny*kp)] );
 }
 
 int main(int argc, char** argv) try {
