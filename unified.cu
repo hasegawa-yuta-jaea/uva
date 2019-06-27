@@ -54,16 +54,16 @@ __global__ void foo(float *const dst, const float *const src, const int I, const
   const dim j = threadIdx.y + blockIdx.y*blockDim.y;
   const dim k = threadIdx.z + blockIdx.z*blockDim.z;
   const dim ijk = i + nx*(j + ny*k);
-  const dim im = (i-1)&(nx-1); // mod nx
-  const dim ip = (i+1)&(nx-1);
-  const dim jm = (j-1)&(ny-1);
-  const dim jp = (j+1)&(ny-1);
-  const dim km = (k-1)&(nz-1);
-  const dim kp = (k+1)&(nz-1);
+  const dim im = (i-1+nx)%nx; // mod nx
+  const dim ip = (i+1+nx)%nx;
+  const dim jm = (j-1+ny)%ny;
+  const dim jp = (j+1+ny)%ny;
+  const dim ijkm = (ijk-1+elem)%(elem); // mod nx
+  const dim ijkp = (ijk+1+elem)%(elem); // !! inly for elem = 2^n
   const float cc = 0.1f;
   dst[ijk] = (1.f-6.f*cc)*src[ijk] + cc*(
     src[im + nx*(j+ny*k)] + src[ip + nx*(j+ny*k)] + src[i + (jm + ny*k)]
-    + src[i + nx*(jp + ny*k)] + src[i + nx*(j + ny*km)] +src[i + nx*(ny*kp)] );
+    + src[i + nx*(jp + ny*k)] + src[ijkm] +src[ijkp] );
 }
 
 int main(int argc, char** argv) try {
