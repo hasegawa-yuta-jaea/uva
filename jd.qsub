@@ -9,6 +9,7 @@
 [ -z $PBS_O_WORKDIR] || cd $PBS_O_WORKDIR
 
 . /etc/profile.d/modules.sh
-[ "$(hostname -s)" == "jdgx2" ] && module load cuda/10.0 mvapich2/2.3/gcc-7.3.0.lp
-sed -i -e 's/ iter = .*/ iter = 2;/g'   unified.cu && make && sh prof.sh    > result.txt 2>&1
-sed -i -e 's/ iter = .*/ iter = 100;/g' unified.cu && make && nvprof ./run >> result.txt 2>&1
+[ "$(hostname -s)" == "jdgx2" ] && module load cuda/10.0
+[[ "$(hostname -a)" =~ "abci" ]] && module load cuda/10.0
+#sed -i -e 's/ iter = .*/ iter = 2;/g'   unified.cu && make && sh prof.sh >> result.txt 2>&1
+sed -i -e 's/ iter = .*/ iter = 100;/g' unified.cu && make && ./run      >> result.txt 2>&1

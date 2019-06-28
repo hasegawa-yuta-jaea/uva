@@ -42,7 +42,6 @@ constexpr int tz = nth/tx/ty;
 
 // measure
 constexpr int iter = 2;
-constexpr int iiter = 1;
 
 __global__ void init(float* dst, float* src, const int gpu) {
   const dim k = threadIdx.x + blockIdx.x*blockDim.x;
@@ -58,8 +57,8 @@ __global__ void foo(float *const dst, const float *const src, const int I, const
   const dim ip = (i+1+nx)%nx;
   const dim jm = (j-1+ny)%ny;
   const dim jp = (j+1+ny)%ny;
-  const dim ijkm = (ijk-1+elem)%(elem); // mod nx
-  const dim ijkp = (ijk+1+elem)%(elem); // !! inly for elem = 2^n
+  const dim ijkm = (ijk-1+elem)%(elem);
+  const dim ijkp = (ijk+1+elem)%(elem);
   const float cc = 0.1f;
   dst[ijk] = (1.f-6.f*cc)*src[ijk] + cc*(
     src[im + nx*(j+ny*k)] + src[ip + nx*(j+ny*k)] + src[i + (jm + ny*k)]
@@ -111,32 +110,37 @@ int main(int argc, char** argv) try {
       << std::setw(4) << double(mtotal - mfree) /1024./1024./1024. << " GiB used" << std::endl;
   }
 
-  std::cout << "step: foo (iterative)" << std::endl;
-  timer.elapse("foo", [&]() {
-    double bw_max = 0;
-    for(int tt=0; tt<iiter; tt++) {
-      util::timer timer;
-      timer.elapse("foo", [&]() {
-        for(int t=0; t<iter; t++) {
-          float* tmp = src;
-          src = dst;
-          dst = tmp;
-          //for(int i=0; i<num_gpu; i++) {
-          for(int k=0; k<gz; k++) for(int j=0; j<gy; j++) for(int i=0; i<gx; i++) {
-            cudaSetDevice(i + gx*(j + gy*k));
-            foo<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(dst, src, i,j,k);
-          }
-          for(int i=0; i<num_gpu; i++) {
-            cudaSetDevice(i);
-            CUDA_SAFE_CALL(cudaDeviceSynchronize());
-          }
-        }
-      });
-      const double bw_cache = 2.* elem* sizeof(float)* iter / timer["foo"] / 1024. / 1024. / 1024.;
-      bw_max = std::max(bw_max, bw_cache);
-      std::cout << "bandwidth: " << bw_max << " GiB/s max, " << bw_cache << " GiB/s recent\r" << std::flush;
+  std::cout << "step: foo (first call)" << std::endl;
+  timer.elapse("foo-first", [&]() {
+    for(int k=0; k<gz; k++) for(int j=0; j<gy; j++) for(int i=0; i<gx; i++) {
+      cudaSetDevice(i + gx*(j + gy*k));
+      foo<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(dst, src, i,j,k);
+    }
+    for(int i=0; i<num_gpu; i++) {
+      cudaSetDevice(i);
+      CUDA_SAFE_CALL(cudaDeviceSynchronize());
     }
   });
+
+  std::cout << "step: foo (iterative)" << std::endl;
+  timer.elapse("foo", [&]() {
+    for(int t=0; t<iter; t++) {
+      float* tmp = src;
+      src = dst;
+      dst = tmp;
+      //for(int i=0; i<num_gpu; i++) {
+      for(int k=0; k<gz; k++) for(int j=0; j<gy; j++) for(int i=0; i<gx; i++) {
+        cudaSetDevice(i + gx*(j + gy*k));
+        foo<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(dst, src, i,j,k);
+      }
+      for(int i=0; i<num_gpu; i++) {
+        cudaSetDevice(i);
+        CUDA_SAFE_CALL(cudaDeviceSynchronize());
+      }
+    }
+  });
+  const double bw_cache = 2.* elem* sizeof(float)* iter / timer["foo"] / 1024. / 1024. / 1024.;
+  std::cout << "bandwidth: " << bw_cache << " GiB/s\r" << std::endl;
 
   std::cout << std::endl;
   for(int i=0; i<num_gpu; i++) {
