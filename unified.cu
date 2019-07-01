@@ -9,6 +9,8 @@
 
 #include "util/timer.hpp"
 
+#include "FuncLaunch.h"
+
 using dim = signed int; // if >8 GB, use long
 
 //#include <numeric>
@@ -42,6 +44,9 @@ constexpr int tz = nth/tx/ty;
 
 // measure
 constexpr int iter = 2;
+
+template<class Func, class... Args>
+__global__ void kernel(Func func, Args... args) { func(args...); }
 
 __global__ void init(float* dst, float* src, const int gpu) {
   const dim k = threadIdx.x + blockIdx.x*blockDim.x;
@@ -94,7 +99,13 @@ int main(int argc, char** argv) try {
     }
     for(int i=0; i<num_gpu; i++) {
       cudaSetDevice(i);
-      init<<<elem/num_gpu/nth, nth>>>(dst, src, i);
+      kernel<<<elem/num_gpu/nth, nth>>>( 
+        []__device__(float* dst, float* src, const int gpu) {
+          const dim k = threadIdx.x + blockDim.x*blockIdx.x;
+          dst[k]=src[k]=k;
+        },
+        dst, src, i
+      );
     }
     for(int i=0; i<num_gpu; i++) {
       cudaSetDevice(i);
@@ -114,7 +125,7 @@ int main(int argc, char** argv) try {
   timer.elapse("foo-first", [&]() {
     for(int k=0; k<gz; k++) for(int j=0; j<gy; j++) for(int i=0; i<gx; i++) {
       cudaSetDevice(i + gx*(j + gy*k));
-      foo<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(dst, src, i,j,k);
+      FuncLaunch::launch(foo, dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz), dst, src, i, j, k);
     }
     for(int i=0; i<num_gpu; i++) {
       cudaSetDevice(i);
@@ -131,7 +142,25 @@ int main(int argc, char** argv) try {
       //for(int i=0; i<num_gpu; i++) {
       for(int k=0; k<gz; k++) for(int j=0; j<gy; j++) for(int i=0; i<gx; i++) {
         cudaSetDevice(i + gx*(j + gy*k));
-        foo<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(dst, src, i,j,k);
+        kernel<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(
+          []__device__(float* dst, const float* src, const int I, const int J, const int K) {
+            const dim i = threadIdx.x + blockIdx.x*blockDim.x;
+            const dim j = threadIdx.y + blockIdx.y*blockDim.y;
+            const dim k = threadIdx.z + blockIdx.z*blockDim.z;
+            const dim ijk = i + nx*(j + ny*k);
+            const dim im = (i-1+nx)%nx; // mod nx
+            const dim ip = (i+1+nx)%nx;
+            const dim jm = (j-1+ny)%ny;
+            const dim jp = (j+1+ny)%ny;
+            const dim ijkm = (ijk-1+elem)%(elem);
+            const dim ijkp = (ijk+1+elem)%(elem);
+            const float cc = 0.1f;
+            dst[ijk] = (1.f-6.f*cc)*src[ijk] + cc*(
+              src[im + nx*(j+ny*k)] + src[ip + nx*(j+ny*k)] + src[i + (jm + ny*k)]
+              + src[i + nx*(jp + ny*k)] + src[ijkm] +src[ijkp] );
+          },
+          dst, src, i, j, k
+        );
       }
       for(int i=0; i<num_gpu; i++) {
         cudaSetDevice(i);
