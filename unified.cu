@@ -42,37 +42,7 @@ constexpr int tz = nth/tx/ty;
 constexpr int iter = 2;
 constexpr int iiter = 1;
 
-__global__ void init(float* dst, float* src, const int gpu) {
-  const long k = threadIdx.x + blockIdx.x*blockDim.x + gpu*blockDim.x*gridDim.x;
-  dst[k] = src[k] = k;
-}
-
-__device__ __forceinline__ long idx(const int& i, const int& j, const int& k, const int& I, const int& J, const int& K) {
-  return i + nx*(j + ny*(k + nz*(I + gx*(J + gy*K))));
-}
-
-__global__ void foo(float *const dst, const float *const src, const int I, const int J, const int K) {
-  const long i = threadIdx.x + blockIdx.x*blockDim.x;
-  const long j = threadIdx.y + blockIdx.y*blockDim.y;
-  const long k = threadIdx.z + blockIdx.z*blockDim.z;
-  long im = i-1, ip = i+1, jm = j-1, jp = j+1, km = k-1, kp = k+1;
-  long IM = I, IP = I, JM = J, JP = J, KM = K, KP = K;
-  if(im < 0) { im = nx-1; IM = (I-1+gx)%gx; }
-  if(ip >= nx) { ip = 0; IP = (I+1)%gx; }
-  if(jm < 0) { jm = ny-1; JM = (J-1+gy)%gy; } 
-  if(jp >= ny) { jp = 0; JP = (J+1)%gy; }
-  if(km < 0) { km = nz-1; KM = (K-1+gz)%gz; }
-  if(kp >= nz) { kp = 0; KP = (K+1)%gz; }
-  const long ijk = idx(i, j, k, I, J, K);
-  const long je[6] = { idx(im, j, k, IM, J, K),
-                   idx(ip, j, k, IP, J, K),
-                   idx(i, jm, k, I, JM, K),
-                   idx(i, jp, k, I, JP, K),
-                   idx(i, j, km, I, J, KM),
-                   idx(i, j, kp, I, J, KP) };
-  const float cc = 0.1f;
-  dst[ijk] = (1.f-6.f*cc)*src[ijk] + cc*(src[je[0]] + src[je[1]] + src[je[2]] + src[je[3]] + src[je[4]] +src[je[5]]);
-}
+template<class Func, class... Args> __global__ void kernel(Func func, Args... args) { func(args...); }
 
 int main(int argc, char** argv) try {
   util::timer timer;
@@ -101,9 +71,14 @@ int main(int argc, char** argv) try {
       cudaMemPrefetchAsync(dst + ofs, memgpu, i);
       cudaMemPrefetchAsync(src + ofs, memgpu, i);
     }
-    for(int i=0; i<num_gpu; i++) {
-      cudaSetDevice(i);
-      init<<<elem/num_gpu/nth, nth>>>(dst, src, i);
+    for(int gi=0; gi<num_gpu; gi++) {
+      cudaSetDevice(gi);
+      kernel<<<elem/num_gpu/nth, nth>>>(
+        [=]__device__() {
+          const long ijk = threadIdx.x + blockIdx.x*blockDim.x + gi*blockDim.x*gridDim.x;
+          dst[ijk] = src[ijk] = ijk;
+        }
+      );
     }
     for(int i=0; i<num_gpu; i++) {
       cudaSetDevice(i);
@@ -130,9 +105,38 @@ int main(int argc, char** argv) try {
           src = dst;
           dst = tmp;
           //for(int i=0; i<num_gpu; i++) {
-          for(int k=0; k<gz; k++) for(int j=0; j<gy; j++) for(int i=0; i<gx; i++) {
-            cudaSetDevice(i + gx*(j + gy*k));
-            foo<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(dst, src, i,j,k);
+          for(int gk=0; gk<gz; gk++) for(int gj=0; gj<gy; gj++) for(int gi=0; gi<gx; gi++) {
+            cudaSetDevice(gi + gx*(gj + gy*gk));
+            kernel<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(
+              [=]__device__() {
+                const long i = threadIdx.x + blockIdx.x*blockDim.x;
+                const long j = threadIdx.y + blockIdx.y*blockDim.y;
+                const long k = threadIdx.z + blockIdx.z*blockDim.z;
+                auto& I = gi;
+                auto& J = gj;
+                auto& K = gk;
+                long im = i-1, ip = i+1, jm = j-1, jp = j+1, km = k-1, kp = k+1;
+                long IM = I, IP = I, JM = J, JP = J, KM = K, KP = K;
+                if(im < 0) { im = nx-1; IM = (I-1+gx)%gx; }
+                if(ip >= nx) { ip = 0; IP = (I+1)%gx; }
+                if(jm < 0) { jm = ny-1; JM = (J-1+gy)%gy; } 
+                if(jp >= ny) { jp = 0; JP = (J+1)%gy; }
+                if(km < 0) { km = nz-1; KM = (K-1+gz)%gz; }
+                if(kp >= nz) { kp = 0; KP = (K+1)%gz; }
+                auto idx = []__device__(long i, long j, long k, long I, long J, long K) {
+                  return i + nx*(j + ny*(k + nz*(I + gx*(J + gy*K))));
+                };
+                const long ijk = idx(i, j, k, I, J, K);
+                const long je[6] = { idx(im, j, k, IM, J, K),
+                                 idx(ip, j, k, IP, J, K),
+                                 idx(i, jm, k, I, JM, K),
+                                 idx(i, jp, k, I, JP, K),
+                                 idx(i, j, km, I, J, KM),
+                                 idx(i, j, kp, I, J, KP) };
+                const float cc = 0.1f;
+                dst[ijk] = (1.f-6.f*cc)*src[ijk] + cc*(src[je[0]] + src[je[1]] + src[je[2]] + src[je[3]] + src[je[4]] +src[je[5]]);
+              }
+            );
           }
           for(int i=0; i<num_gpu; i++) {
             cudaSetDevice(i);

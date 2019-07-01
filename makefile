@@ -1,25 +1,13 @@
 PROG:=run
 
-ifeq ("$(shell which nvidia-smi 2>/dev/null)", "")
-  TARGET:= r
-else
-ifeq ("$(shell hostname)", "jdgx2")
-  TARGET:= j
-else
-  TARGET:= $(PROG)
-endif
-endif
+.PHONY: all clean
 
-.PHONY: all r j
+NVFLAGS := -O2 -std=c++11 -arch=sm_70 --expt-extended-lambda -Xptxas=-v
 
-all: $(TARGET)
+all: $(PROG)
 
 $(PROG): unified.cu
-	nvcc -O2 -std=c++11 -arch sm_70 --compiler-bindir=g++ --compiler-options="-O2 -std=c++11" unified.cu -o run
+	nvcc unified.cu -o run $(NVFLAGS)
 
-j: $(PROG)
-	qsub jd.qsub
-	tail -F result.txt
-
-r:
-	./remote jd
+clean:
+	-rm -f $(PROG)
