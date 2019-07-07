@@ -3,11 +3,17 @@
 #include <iostream>
 #include <iomanip>
 #include <limits>
+#include <sys/time.h>
 
 #define GPU
-#include "utility/CUDA_SAFE_CALL.cuda.h"
+//#include "utility/CUDA_SAFE_CALL.cuda.h"
 
-#include "util/timer.hpp"
+#define ERR_NE(X,Y) do { if ((X) != (Y)) { \
+			     fprintf(stderr,"Error in %s at %s:%d\n",__func__,__FILE__,__LINE__); \
+			     exit(-1);}} while(0)
+#define CUDA_SAFE_CALL(X) ERR_NE((X),cudaSuccess)
+
+//#include "util/timer.hpp"
 
 using dim = signed int; // if >8 GB, use long
 
@@ -34,14 +40,15 @@ constexpr dim NZ = nz*gz;
 constexpr dim elem = NX*NY*NZ;
 
 // gpu kernel
-constexpr int nth = 1024;
-constexpr int tx = std::gcd(dim(128l), nx);
-constexpr int ty = 4;
-constexpr int tz = nth/tx/ty;
+//constexpr int nth = 1024;
+constexpr int nth = 256;
+constexpr int tx = std::gcd(dim(256l), nx);
+constexpr int ty = nth/tx;
+constexpr int tz = 1;
 
 
 // measure
-constexpr int iter = 2;
+constexpr int iter = 100;
 
 __global__ void init(float* dst, float* src, const int gpu) {
   const dim k = threadIdx.x + blockIdx.x*blockDim.x;
@@ -61,12 +68,15 @@ __global__ void foo(float *const dst, const float *const src, const int I, const
   const dim ijkp = (ijk+1+elem)%(elem);
   const float cc = 0.1f;
   dst[ijk] = (1.f-6.f*cc)*src[ijk] + cc*(
-    src[im + nx*(j+ny*k)] + src[ip + nx*(j+ny*k)] + src[i + (jm + ny*k)]
-    + src[i + nx*(jp + ny*k)] + src[ijkm] +src[ijkp] );
+      src[im + nx*(j  + ny*k)]
+    + src[ip + nx*(j  + ny*k)]
+    + src[i  + nx*(jm + ny*k)]
+    + src[i  + nx*(jp + ny*k)]
+    + src[ijkm]
+    + src[ijkp] );
 }
 
-int main(int argc, char** argv) try {
-  util::timer timer;
+int main(int argc, char** argv) {
   float *dst, *src;
 
   std::cout << "total mem = " << 2l*elem*sizeof(float) / 1024/1024/1024. << " GiB" << std::endl;
@@ -75,32 +85,40 @@ int main(int argc, char** argv) try {
   std::cout << "  partition= (" << gx << ", " << gy << ", " << gz << ")" << std::endl;
   std::cout << "  per gpu  = (" << nx << ", " << ny << ", " << nz << ")" << std::endl;
 
+  struct timeval tv_start, tv_end;
+  double elapsed;
+  
   std::cout << "step: malloc&init" << std::endl;
-  timer.elapse("malloc&init", [&]() {
+  {
+    gettimeofday( &tv_start, NULL );
     const size_t memall = elem * sizeof(float);
     const size_t memgpu = memall / num_gpu;
-    cudaMallocManaged(&dst, memall);
-    cudaMallocManaged(&src, memall);
+    CUDA_SAFE_CALL(cudaMallocManaged(&dst, memall));
+    CUDA_SAFE_CALL(cudaMallocManaged(&src, memall));
     for(int i=0; i<num_gpu; i++) {
-      cudaMemAdvise(dst, memall, cudaMemAdviseSetAccessedBy, i);
-      cudaMemAdvise(src, memall, cudaMemAdviseSetAccessedBy, i);
+	CUDA_SAFE_CALL(cudaMemAdvise(dst, memall, cudaMemAdviseSetAccessedBy, i));
+	CUDA_SAFE_CALL(cudaMemAdvise(src, memall, cudaMemAdviseSetAccessedBy, i));
     }
     for(int i=0; i<num_gpu; i++) {
       const size_t ofs = elem*i/num_gpu;
-      cudaMemAdvise(dst + ofs, memgpu, cudaMemAdviseSetPreferredLocation, i);
-      cudaMemAdvise(src + ofs, memgpu, cudaMemAdviseSetPreferredLocation, i);
-      cudaMemPrefetchAsync(dst + ofs, memgpu, i);
-      cudaMemPrefetchAsync(src + ofs, memgpu, i);
+      CUDA_SAFE_CALL(cudaMemAdvise(dst + ofs, memgpu, cudaMemAdviseSetPreferredLocation, i));
+      CUDA_SAFE_CALL(cudaMemAdvise(src + ofs, memgpu, cudaMemAdviseSetPreferredLocation, i));
+      CUDA_SAFE_CALL(cudaMemPrefetchAsync(dst + ofs, memgpu, i));
+      CUDA_SAFE_CALL(cudaMemPrefetchAsync(src + ofs, memgpu, i));
     }
     for(int i=0; i<num_gpu; i++) {
-      cudaSetDevice(i);
-      init<<<elem/num_gpu/nth, nth>>>(dst, src, i);
+	CUDA_SAFE_CALL(cudaSetDevice(i));
+	init<<<elem/num_gpu/nth, nth>>>(dst, src, i);
+	CUDA_SAFE_CALL(cudaDeviceSynchronize());
     }
     for(int i=0; i<num_gpu; i++) {
-      cudaSetDevice(i);
-      CUDA_SAFE_CALL(cudaDeviceSynchronize());
+	CUDA_SAFE_CALL(cudaSetDevice(i));
+	CUDA_SAFE_CALL(cudaDeviceSynchronize());
     }
-  });
+    gettimeofday( &tv_end, NULL );
+    elapsed = (double)(tv_end.tv_sec - tv_start.tv_sec) + (double)(tv_end.tv_usec - tv_start.tv_usec) * 1e-6;
+    std::cout << "real (sec) : " << elapsed << std::endl; 
+  }
 
   for(int i=0; i<num_gpu; i++) {
     size_t mfree, mtotal;
@@ -111,7 +129,8 @@ int main(int argc, char** argv) try {
   }
 
   std::cout << "step: foo (first call)" << std::endl;
-  timer.elapse("foo-first", [&]() {
+  {
+    gettimeofday( &tv_start, NULL );
     for(int k=0; k<gz; k++) for(int j=0; j<gy; j++) for(int i=0; i<gx; i++) {
       cudaSetDevice(i + gx*(j + gy*k));
       foo<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(dst, src, i,j,k);
@@ -120,10 +139,14 @@ int main(int argc, char** argv) try {
       cudaSetDevice(i);
       CUDA_SAFE_CALL(cudaDeviceSynchronize());
     }
-  });
+    gettimeofday( &tv_end, NULL );
+    elapsed = (double)(tv_end.tv_sec - tv_start.tv_sec) + (double)(tv_end.tv_usec - tv_start.tv_usec) * 1e-6;
+    std::cout << "real (sec) : " << elapsed << std::endl; 
+  }
 
   std::cout << "step: foo (iterative)" << std::endl;
-  timer.elapse("foo", [&]() {
+  {
+    gettimeofday( &tv_start, NULL );
     for(int t=0; t<iter; t++) {
       float* tmp = src;
       src = dst;
@@ -138,9 +161,12 @@ int main(int argc, char** argv) try {
         CUDA_SAFE_CALL(cudaDeviceSynchronize());
       }
     }
-  });
-  const double bw_cache = 2.* elem* sizeof(float)* iter / timer["foo"] / 1024. / 1024. / 1024.;
-  std::cout << "bandwidth: " << bw_cache << " GiB/s\r" << std::endl;
+    gettimeofday( &tv_end, NULL );
+    elapsed = (double)(tv_end.tv_sec - tv_start.tv_sec) + (double)(tv_end.tv_usec - tv_start.tv_usec) * 1e-6;
+    std::cout << "real (sec) : " << elapsed << std::endl; 
+  }
+  // const double bw_cache = 2.* elem* sizeof(float)* iter / timer["foo"] / 1024. / 1024. / 1024.;
+  // std::cout << "bandwidth: " << bw_cache << " GiB/s\r" << std::endl;
 
   std::cout << std::endl;
   for(int i=0; i<num_gpu; i++) {
@@ -151,15 +177,15 @@ int main(int argc, char** argv) try {
       << std::setw(4) << double(mtotal - mfree) /1024./1024./1024. << " GiB used" << std::endl;
   }
 
-  timer.elapse("fina-GPU", cudaDeviceReset);
+  // timer.elapse("fina-GPU", cudaDeviceReset);
 
-  timer.showall();
+  // timer.showall();
 
   return 0;
-} catch (const Utility::Exception& e) {
-  std::cerr << "fatal: " << e.ToString() << std::endl;
-  return 1;
-} catch (...) {
-  std::cerr << "fatal: unknown error" << std::endl;
-  return 2;
+//} catch (const Utility::Exception& e) {
+//  std::cerr << "fatal: " << e.ToString() << std::endl;
+//  return 1;
+//} catch (...) {
+//  std::cerr << "fatal: unknown error" << std::endl;
+//  return 2;
 }

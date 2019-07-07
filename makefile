@@ -1,11 +1,14 @@
-PROG:=run
+NVCC = nvcc
 
-.PHONY: all clean
+NVCCFLAGS =
+NVCCFLAGS+= --std c++11
+NVCCFLAGS+= -lineinfo
+NVCCFLAGS+= --generate-code arch=compute_70,code=sm_70
 
-all: $(PROG)
+NVLDFLAGS =
 
-$(PROG): unified.cu
-	nvcc -O2 -std=c++11 -arch sm_70 --compiler-bindir=g++ --compiler-options="-O2 -std=c++11" unified.cu -o run
+test: unified.cu
+	${NVCC} ${NVCCFLAGS} -o $@ $^ ${NVLDFLAGS}
 
 clean:
-	-rm -f $(PROG)
+	rm -f test *~
