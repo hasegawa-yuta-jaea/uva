@@ -1,2 +1,6 @@
 .*.un~
 *.nvvp
+logs/
+run
+run.sh
+
