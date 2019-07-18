@@ -1,6 +1,6 @@
 PROG:=run
 
-.PHONY: all clean
+.PHONY: all clean do
 
 NVFLAGS += --generate-code arch=compute_70,code=sm_70
 NVFLAGS += --generate-code arch=compute_60,code=sm_60
@@ -10,10 +10,13 @@ NVFLAGS += -lineinfo
 NVFLAGS += -Xptxas=-v
 NVFLAGS += -Xcompiler="-Wall -Wextra"
 
-all: $(PROG)
+all: clean $(PROG) do
 
 $(PROG): unified.cu
-	nvcc unified.cu -o run $(NVFLAGS)
+	nvcc unified.cu -o $(PROG) $(NVFLAGS)
+
+do:
+	./$(PROG)
 
 clean:
 	-rm -f $(PROG)
