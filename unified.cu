@@ -33,7 +33,7 @@ namespace std {
 using real = float;
 
 // multi-gpu
-constexpr int gx { 16  };
+constexpr int gx { 16 };
 constexpr int gy { 1  };
 constexpr int gz { 1  };
 constexpr int num_gpu { gx*gy*gz };
@@ -53,20 +53,27 @@ template<long L> struct enough_type { using type =
 using aint = typename enough_type<Q * nx_ * ny_ * nz_ * gx * gy * gz>::type;
 //using aint = long;
 
-constexpr aint nx { nx_ };
-constexpr aint ny { ny_ }; 
-constexpr aint nz { nz_ };
-constexpr aint NX { nx*gx };
-constexpr aint NY { ny*gy };
-constexpr aint NZ { nz*gz };
+constexpr aint bx { 4 };
+constexpr aint by { 4 };
+constexpr aint bz { 4 };
+constexpr aint nx { nx_ / 4 };
+constexpr aint ny { ny_ / 4 }; 
+constexpr aint nz { nz_ / 4 };
+constexpr aint NX { bx*nx*gx };
+constexpr aint NY { by*ny*gy };
+constexpr aint NZ { bz*nz*gz };
 constexpr aint elem { Q*NX*NY*NZ };
 
 // gpu kernel
 constexpr int nth { 256 };
-constexpr int tx { std::gcd(256, nx) };
-constexpr int ty { nth/tx };
-constexpr int tz { nth/tx/ty };
-static_assert(nth == tx*ty*tz, "check blockDim.{x,y,z}");
+//constexpr int tx { std::gcd(256, nx) };
+//constexpr int ty { nth/tx };
+//constexpr int tz { nth/tx/ty };
+//static_assert(nth == tx*ty*tz, "check blockDim.{x,y,z}");
+
+// blocking gpu kernel
+const dim3 blocking_block(bx, by, bz);
+const dim3 blocking_grid(nx, ny, nz);
 
 // measure
 constexpr int iter { 2 };
@@ -78,13 +85,15 @@ int main(int argc, char** argv) try {
   static_cast<void>(argc);
   static_cast<void>(argv);
 
-  std::cout << " aint = " << typeid(aint).name() << std::endl;
+  std::cout << " aint = " << typeid(aint).name() << sizeof(aint)*8 << std::endl;
 
   std::cout << "total mem = " << 2l*elem*sizeof(real) / 1024/1024/1024. << " GiB" << std::endl;
   std::cout << "  per gpu = " << 2l*elem*sizeof(real) / 1024/1024/1024./num_gpu << " GiB" << std::endl;
   std::cout << "total mesh = (" << NX << ", " << NY << ", " << NZ << ")" << std::endl;
-  std::cout << "  partition= (" << gx << ", " << gy << ", " << gz << ")" << std::endl;
-  std::cout << "  per gpu  = (" << nx << ", " << ny << ", " << nz << ")" << std::endl;
+  std::cout << "       gpu = (" << gx << ", " << gy << ", " << gz << ")" << std::endl;
+  std::cout << "mesh per g = (" << nx*bx << ", " << ny*by << ", " << nz*bz << ")" << std::endl;
+  std::cout << "  blocking = (" << bx << ", " << by << ", " << bz << ")" << std::endl;
+  std::cout << "blck per g = (" << nx << ", " << ny << ", " << nz << ")" << std::endl;
 
   util::timer timer;
   util::cu_vector<real> src(elem), dst(elem);
@@ -121,6 +130,7 @@ int main(int argc, char** argv) try {
       cudaMemPrefetchAsync(src.data() + ofs, memgpu, gpu[i]);
     }
     std::cout << std::endl;
+    std::cout << "first_touch" << std::flush;
     for(int gi=0; gi<num_gpu; gi++) {
       std::cout << "." << std::flush;
       cudaSetDevice(gpu[gi]);
@@ -132,7 +142,7 @@ int main(int argc, char** argv) try {
       );
     }
     std::cout << std::endl;
-    std::cout << "first_touch" << std::flush;
+    std::cout << "first_touch::sync" << std::flush;
     for(int i=0; i<num_gpu; i++) {
       std::cout << "." << std::flush;
       cudaSetDevice(gpu[i]);
@@ -166,32 +176,50 @@ int main(int argc, char** argv) try {
           //for(int i=0; i<num_gpu; i++) {
           for(int gk=0; gk<gz; gk++) for(int gj=0; gj<gy; gj++) for(int gi=0; gi<gx; gi++) {
             cudaSetDevice(gpu[gi + gx*(gj + gy*gk)]);
-            kernel<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(
+            kernel<<<blocking_grid, blocking_block>>>(
               [=]__device__(real* buf1, const real* buf2) {
-                const aint i = threadIdx.x + blockIdx.x*blockDim.x;
-                const aint j = threadIdx.y + blockIdx.y*blockDim.y;
-                const aint k = threadIdx.z + blockIdx.z*blockDim.z;
-                auto& I = gi;
-                auto& J = gj;
-                auto& K = gk;
-                auto idx = []__device__(aint i, aint j, aint k, aint I, aint J, aint K, int q) {
-                  return (i + nx*(j + ny*(k + nz*(q + Q*(I + gx*(J + gy*K))))));
+                struct tbl { 
+                  aint t, b, L;
+                  __device__ tbl(aint t, aint b, aint L): t(t), b(b), L(L) {}
+                  __device__ void mod(const aint nt, const aint nb, const aint nl) {
+                    if(t < 0) {
+                      t = nt-1;
+                      b -= 1;
+                      if(b < 0) {
+                        b = nb-1;
+                        L -= 1;
+                        if(L < 0) { L = nl-1; } // periodic boundary
+                      }
+                    } else if(t >= nt) {
+                      t = 0;
+                      b += 1;
+                      if(b >= nb) {
+                        b = 0;
+                        L += 1;
+                        if(L >= nl) { L = 0; } // periodic boundary
+                      }
+                    }
+                  }
+                };
+                const tbl i ( threadIdx.x, blockIdx.x, gi );
+                const tbl j ( threadIdx.y, blockIdx.y, gj );
+                const tbl k ( threadIdx.z, blockIdx.z, gk );
+                auto idx = []__device__(tbl i, tbl j, tbl k, int q) {
+                  return (
+                    i.t + bx*( j.t + by*( k.t + bz*( q + Q*(
+                    i.b + nx*( j.b + ny*( k.b + nz*(
+                    i.L + gx*( j.L + gy*( k.L
+                  ))))))))));
                 };
                 #pragma unroll
                 for(int q=0; q<Q; q++) {
                   const aint ci = q%3 -1;
                   const aint cj = (q/3)%3 -1;
                   const aint ck = q/9 -1;
-                  aint ii = i - ci, II = I;
-                  if(ii < 0) { ii = nx-1; II = (I-1+gx)%gx; }
-                  if(ii >= nx) { ii = 0; II = (I+1)%gx; }
-                  aint jj = j - cj, JJ = J; 
-                  if(jj < 0) { jj = ny-1; JJ = (J-1+gy)%gy; } 
-                  if(jj >= ny) { jj = 0; JJ = (J+1)%gy; }
-                  aint kk = k - ck, KK = K;
-                  if(kk < 0) { kk = nz-1; KK = (K-1+gz)%gz; }
-                  if(kk >= nz) { kk = 0; KK = (K+1)%gz; }
-                  buf1[idx(i,j,k,I,J,K,q)] = buf2[idx(ii,jj,kk,II,JJ,KK,q)];
+                  tbl ii = i; ii.t -= ci;
+                  tbl jj = j; jj.t -= cj;
+                  tbl kk = k; kk.t -= ck;
+                  buf1[idx(i,j,k,q)] = buf2[idx(ii,jj,kk,q)];
                 }
               }, dst.data(), src.data()
             );
