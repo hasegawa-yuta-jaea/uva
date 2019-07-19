@@ -38,6 +38,7 @@ constexpr int gy { 1  };
 constexpr int gz { 1  };
 constexpr int num_gpu { gx*gy*gz };
 constexpr int gpu[] { 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 };
+//constexpr int gpu[] { 0,8,1,9,2,10,3,11,4,12,5,13,6,14,7,15 };
 
 // grid
 constexpr bool strong { true };
