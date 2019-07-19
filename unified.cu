@@ -216,9 +216,9 @@ int main(int argc, char** argv) try {
                   const aint ci = q%3 -1;
                   const aint cj = (q/3)%3 -1;
                   const aint ck = q/9 -1;
-                  tbl ii = i; ii.t -= ci;
-                  tbl jj = j; jj.t -= cj;
-                  tbl kk = k; kk.t -= ck;
+                  tbl ii = i; ii.t -= ci; ii.mod(bx, nx, gx);
+                  tbl jj = j; jj.t -= cj; jj.mod(by, ny, gy);
+                  tbl kk = k; kk.t -= ck; kk.mod(bz, nz, gz);
                   buf1[idx(i,j,k,q)] = buf2[idx(ii,jj,kk,q)];
                 }
               }, dst.data(), src.data()
