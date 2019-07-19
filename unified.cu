@@ -33,16 +33,17 @@ namespace std {
 using real = float;
 
 // multi-gpu
-constexpr int gx { 4  };
+constexpr int gx { 16 };
 constexpr int gy { 1  };
 constexpr int gz { 1  };
 constexpr int num_gpu { gx*gy*gz };
-constexpr int gpu[] { 0,1,2,3,4,5,6,7 };
+constexpr int gpu[] { 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 };
 
 // grid
-constexpr long nx_ { 1024 / gx * gx }; // if strong scaling, devide by g{x,y,z}
-constexpr long ny_ { 1024 / gy * gy };
-constexpr long nz_ { 1024 / gz * gz };
+constexpr bool strong { false };
+constexpr long nx_ { 1024 / gx * (strong ? 1 : gx) }; // if strong scaling, devide by g{x,y,z}
+constexpr long ny_ { 1024 / gy * (strong ? 1 : gy) };
+constexpr long nz_ { 1024 / gz * (strong ? 1 : gz) };
 template<bool Cond, class Then, class Else> struct if_ { using type = Then; };
 template<class Then, class Else> struct if_<false, Then, Else> { using type = Else; };
 template<long L> struct enough_type { using type = 
@@ -77,9 +78,9 @@ int main(int argc, char** argv) try {
   static_cast<void>(argv);
   util::timer timer;
   util::cu_ptr<real> src(elem), dst(elem);
-  for(aint i=0; i<elem; i++) {
-    src[i] = dst[i] = i;
-  }
+  //for(aint i=0; i<elem; i++) {
+  //  src[i] = dst[i] = i;
+  //}
   //std::cout << src.size() << std::endl;
   //util::cu_vector<real> src, dst;
   //for(aint i=0; i<elem; i++) {
@@ -87,26 +88,26 @@ int main(int argc, char** argv) try {
   //  dst.push_back(real(2*i));
   //}
 
-  // test task id
-  constexpr int lv_max = 3;
-  constexpr int num_color = 8;
-  util::cu_vec3d<int, lv_max, num_color> task_id;
-  for(int lv=0; lv<lv_max; lv++) {
-    for(int color=0; color<num_color; color++) {
-      for(int i=0; i<(1+lv*color); i++) {
-        task_id[lv][color].push_back(2*color + 100.f*lv);
-      }
-    }
-  }
-  for(int lv=0; lv<lv_max; lv++) {
-    for(int color=0; color<num_color; color++) {
-      std::cout << "task_id[" << lv << "][" << color << "] = " << std::flush;
-      for(const auto& id: task_id[lv][color]) {
-        std::cout << id << " " << std::flush;
-      }
-      std::cout << std::endl;
-    }
-  }
+  //// test task id
+  //constexpr int lv_max = 3;
+  //constexpr int num_color = 8;
+  //util::cu_vec3d<int, lv_max, num_color> task_id;
+  //for(int lv=0; lv<lv_max; lv++) {
+  //  for(int color=0; color<num_color; color++) {
+  //    for(int i=0; i<(1+lv*color); i++) {
+  //      task_id[lv][color].push_back(2*color + 100.f*lv);
+  //    }
+  //  }
+  //}
+  //for(int lv=0; lv<lv_max; lv++) {
+  //  for(int color=0; color<num_color; color++) {
+  //    std::cout << "task_id[" << lv << "][" << color << "] = " << std::flush;
+  //    for(const auto& id: task_id[lv][color]) {
+  //      std::cout << id << " " << std::flush;
+  //    }
+  //    std::cout << std::endl;
+  //  }
+  //}
 
   std::cout << " aint = " << typeid(aint).name() << std::endl;
 
@@ -133,15 +134,15 @@ int main(int argc, char** argv) try {
       cudaMemPrefetchAsync(dst.data() + ofs, memgpu, gpu[i]);
       cudaMemPrefetchAsync(src.data() + ofs, memgpu, gpu[i]);
     }
-    //for(int gi=0; gi<num_gpu; gi++) {
-    //  cudaSetDevice(gpu[gi]);
-    //  kernel<<<elem/num_gpu/nth, nth>>>(
-    //    [=]__device__(real* buf1, real* buf2) {
-    //      const aint ijk = threadIdx.x + blockIdx.x*blockDim.x + gi*blockDim.x*gridDim.x;
-    //      buf1[ijk] = buf2[ijk] = ijk;
-    //    }, dst.data(), src.data()
-    //  );
-    //}
+    for(int gi=0; gi<num_gpu; gi++) {
+      cudaSetDevice(gpu[gi]);
+      kernel<<<elem/num_gpu/nth, nth>>>(
+        [=]__device__(real* buf1, real* buf2) {
+          const aint ijk = threadIdx.x + blockIdx.x*blockDim.x + gi*blockDim.x*gridDim.x;
+          buf1[ijk] = buf2[ijk] = ijk;
+        }, dst.data(), src.data()
+      );
+    }
     for(int i=0; i<num_gpu; i++) {
       cudaSetDevice(gpu[i]);
       CUDA_SAFE_CALL(cudaDeviceSynchronize());
@@ -200,7 +201,7 @@ int main(int argc, char** argv) try {
                                  idx(i, j, km, I, J, KM),
                                  idx(i, j, kp, I, J, KP) };
                 const real cc = 0.1f;
-                buf1[ijk] = (1.f-6.f*cc)*buf2[ijk] + cc*(buf2[je[0]] + buf2[je[1]] + buf2[je[2]] + buf2[je[3]] + buf2[je[4]] +buf2[je[5]]);
+                buf1[ijk] = (1.f-6.f*cc)*buf2[ijk] + cc*(buf2[je[0]]);;// + buf2[je[1]] + buf2[je[2]] + buf2[je[3]] + buf2[je[4]] +buf2[je[5]]);
               }, dst.data(), src.data()
             );
           }
