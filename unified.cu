@@ -68,6 +68,9 @@ constexpr int ty { nth/tx };
 constexpr int tz { nth/tx/ty };
 static_assert(nth == tx*ty*tz, "check blockDim.{x,y,z}");
 
+//
+constexpr int mem_invalid_shift_byte = 1*sizeof(real)*4*4*4*27; // one block?
+
 // measure
 constexpr int iter { 2 };
 constexpr int iiter { 10 };
@@ -115,18 +118,32 @@ int main(int argc, char** argv) try {
     for(int i=0; i<num_gpu; i++) {
       std::cout << "." << std::flush;
       const size_t ofs = elem*i/num_gpu;
-      cudaMemAdvise(dst.data() + ofs, memgpu, cudaMemAdviseSetPreferredLocation, gpu[i]);
-      cudaMemAdvise(src.data() + ofs, memgpu, cudaMemAdviseSetPreferredLocation, gpu[i]);
-      cudaMemPrefetchAsync(dst.data() + ofs, memgpu, gpu[i]);
-      cudaMemPrefetchAsync(src.data() + ofs, memgpu, gpu[i]);
+      // invalid prefetch
+      const size_t ofsi = (i != 0) ? ofs + mem_invalid_shift_byte : ofs;
+      const size_t memi = i == 0 ? memgpu + mem_invalid_shift_byte
+                          : (i == num_gpu-1 ? memgpu - mem_invalid_shift_byte
+                             : memgpu)
+                        ;
+      cudaMemAdvise(dst.data() + ofsi, memi, cudaMemAdviseSetPreferredLocation, gpu[i]);
+      cudaMemAdvise(src.data() + ofsi, memi, cudaMemAdviseSetPreferredLocation, gpu[i]);
+      cudaMemPrefetchAsync(dst.data() + ofs, memi, gpu[i]);
+      cudaMemPrefetchAsync(src.data() + ofs, memi, gpu[i]);
     }
     std::cout << std::endl;
     for(int gi=0; gi<num_gpu; gi++) {
       std::cout << "." << std::flush;
       cudaSetDevice(gpu[gi]);
-      kernel<<<elem/num_gpu/nth, nth>>>(
+      const size_t ofs = elem*gi/num_gpu;
+      // invalid prefetch
+      const size_t ofsi = (gi != 0) ? ofs + mem_invalid_shift_byte : ofs;
+      const size_t memi = gi == 0 ? memgpu + mem_invalid_shift_byte
+                          : (gi == num_gpu-1 ? memgpu - mem_invalid_shift_byte
+                             : memgpu)
+                        ;
+      kernel<<<memi/nth, nth>>>(
         [=]__device__(real* buf1, real* buf2) {
-          const aint ijk = threadIdx.x + blockIdx.x*blockDim.x + gi*blockDim.x*gridDim.x;
+          const aint ijk = threadIdx.x + blockIdx.x*blockDim.x + ofsi;
+          if(ijk >= memi/sizeof(real)) return;
           buf1[ijk] = buf2[ijk] = ijk;
         }, dst.data(), src.data()
       );
