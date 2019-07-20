@@ -10,14 +10,15 @@
 #include "util/timer.hpp"
 
 //#include <numeric>
+#include <type_traits>
 namespace std {
-  template<typename T> constexpr T gcd(const T& a, const T& b) {
+  template<typename T, typename U> constexpr typename common_type<T, U>::type gcd(const T& a, const U& b) {
     return b==0 ? a : gcd(b, a%b);
   }
 }
 
 // multi-gpu
-constexpr int gx = 1;
+constexpr int gx = 16;
 constexpr int gy = 1;
 constexpr int gz = 1;
 constexpr int num_gpu = gx*gy*gz;
@@ -32,15 +33,18 @@ constexpr long NZ = nz*gz;
 constexpr long elem = NX*NY*NZ;
 
 // gpu kernel
-constexpr int nth = 1024;
-constexpr int tx = std::gcd(1024l, nx);
-constexpr int ty = 1;
-constexpr int tz = nth/tx/ty;
+constexpr int nth = 256;
+constexpr int tx = std::gcd(nth, nx);
+constexpr int ty = nth/tx;
+constexpr int tz = 1;
+static_assert(nth == tx*ty*tz);
 
 
 // measure
 constexpr int iter = 2;
-constexpr int iiter = 1;
+constexpr int iiter = 10;
+
+constexpr int invalid_memshift = 0*nth;
 
 __global__ void init(float* dst, float* src, const int gpu) {
   const long k = threadIdx.x + blockIdx.x*blockDim.x + gpu*blockDim.x*gridDim.x;
@@ -74,7 +78,7 @@ __global__ void foo(float *const dst, const float *const src, const int I, const
   dst[ijk] = (1.f-6.f*cc)*src[ijk] + cc*(src[je[0]] + src[je[1]] + src[je[2]] + src[je[3]] + src[je[4]] +src[je[5]]);
 }
 
-int main(int argc, char** argv) try {
+int main() try {
   util::timer timer;
   float *dst, *src;
 
@@ -96,10 +100,14 @@ int main(int argc, char** argv) try {
     }
     for(int i=0; i<num_gpu; i++) {
       const size_t ofs = elem*i/num_gpu;
-      cudaMemAdvise(dst + ofs, memgpu, cudaMemAdviseSetPreferredLocation, i);
-      cudaMemAdvise(src + ofs, memgpu, cudaMemAdviseSetPreferredLocation, i);
-      cudaMemPrefetchAsync(dst + ofs, memgpu, i);
-      cudaMemPrefetchAsync(src + ofs, memgpu, i);
+      // invalid prefetch
+      const size_t ofsi = i != 0 ? ofs + invalid_memshift : ofs;
+      const size_t memi = i == 0 ? memgpu + invalid_memshift 
+                          : (i == num_gpu - 1 ? memgpu - invalid_memshift : memgpu);
+      cudaMemAdvise(dst + ofsi, memi, cudaMemAdviseSetPreferredLocation, i);
+      cudaMemAdvise(src + ofsi, memi, cudaMemAdviseSetPreferredLocation, i);
+      cudaMemPrefetchAsync(dst + ofsi, memi, i);
+      cudaMemPrefetchAsync(src + ofsi, memi, i);
     }
     for(int i=0; i<num_gpu; i++) {
       cudaSetDevice(i);
@@ -140,9 +148,11 @@ int main(int argc, char** argv) try {
           }
         }
       });
-      const double bw_cache = 2.* elem* sizeof(float)* iter / timer["foo"] / 1024. / 1024. / 1024.;
-      bw_max = std::max(bw_max, bw_cache);
-      std::cout << "bandwidth: " << bw_max << " GiB/s max, " << bw_cache << " GiB/s recent\r" << std::flush;
+      //const double bw_cache = 2.* elem* sizeof(float)* iter / timer["foo"] / 1024. / 1024. / 1024.;
+      //bw_max = std::max(bw_max, bw_cache);
+      //std::cout << "bandwidth: " << bw_max << " GiB/s max, " << bw_cache << " GiB/s recent" << std::endl;
+      const double glups = elem * iter / timer["foo"] / 1000. / 1000. / 1000.;
+      std::cout << glups << " GLUPS" << std::endl;
     }
   });
 
