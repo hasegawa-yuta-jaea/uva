@@ -140,7 +140,7 @@ int main(int argc, char** argv) try {
                           : (gi == num_gpu-1 ? memgpu - mem_invalid_shift_byte
                              : memgpu)
                         ;
-      kernel<<<memi/nth, nth>>>(
+      kernel<<<memi/sizeof(real)/nth, nth>>>(
         [=]__device__(real* buf1, real* buf2) {
           const aint ijk = threadIdx.x + blockIdx.x*blockDim.x + ofsi;
           if(ijk >= memi/sizeof(real)) return;
