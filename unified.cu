@@ -69,7 +69,7 @@ constexpr int tz { nth/tx/ty };
 static_assert(nth == tx*ty*tz, "check blockDim.{x,y,z}");
 
 //
-constexpr int mem_invalid_shift_byte = 1*sizeof(real)*4*4*4*27; // one block?
+constexpr int mem_invalid_shift = elem/num_gpu/8; // one block?
 
 // measure
 constexpr int iter { 2 };
@@ -119,9 +119,9 @@ int main(int argc, char** argv) try {
       std::cout << "." << std::flush;
       const size_t ofs = elem*i/num_gpu;
       // invalid prefetch
-      const size_t ofsi = (i != 0) ? ofs + mem_invalid_shift_byte : ofs;
-      const size_t memi = i == 0 ? memgpu + mem_invalid_shift_byte
-                          : (i == num_gpu-1 ? memgpu - mem_invalid_shift_byte
+      const size_t ofsi = (i != 0) ? ofs + mem_invalid_shift : ofs;
+      const size_t memi = i == 0 ? memgpu + mem_invalid_shift*sizeof(float)
+                          : (i == num_gpu-1 ? memgpu - mem_invalid_shift*sizeof(float)
                              : memgpu)
                         ;
       cudaMemAdvise(dst.data() + ofsi, memi, cudaMemAdviseSetPreferredLocation, gpu[i]);
@@ -135,12 +135,13 @@ int main(int argc, char** argv) try {
       cudaSetDevice(gpu[gi]);
       const size_t ofs = elem*gi/num_gpu;
       // invalid prefetch
-      const size_t ofsi = (gi != 0) ? ofs + mem_invalid_shift_byte : ofs;
-      const size_t memi = gi == 0 ? memgpu + mem_invalid_shift_byte
-                          : (gi == num_gpu-1 ? memgpu - mem_invalid_shift_byte
+      const size_t ofsi = (gi != 0) ? ofs + mem_invalid_shift : ofs;
+      const size_t memi = gi == 0 ? memgpu + mem_invalid_shift*sizeof(float)
+                          : (gi == num_gpu-1 ? memgpu - mem_invalid_shift*sizeof(float)
                              : memgpu)
                         ;
-      kernel<<<memi/sizeof(real)/nth, nth>>>(
+      const long grid = (memi/sizeof(real) + nth -1)/nth;
+      kernel<<<grid, nth>>>(
         [=]__device__(real* buf1, real* buf2) {
           const aint ijk = threadIdx.x + blockIdx.x*blockDim.x + ofsi;
           if(ijk >= memi/sizeof(real)) return;
