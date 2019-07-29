@@ -44,13 +44,14 @@ constexpr int gpu[] { 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 };
 
 // grid
 constexpr bool strong { false };
-constexpr long nx_ { 1024 / gx * (strong ? 1 : gx) }; // if strong scaling, devide by g{x,y,z}
-constexpr long ny_ { 1024 / gy * (strong ? 1 : gy) };
-constexpr long nz_ { 1024 / gz * (strong ? 1 : gz) };
+constexpr int Q { 27 };
+constexpr long nx_ { 512 / gx * (strong ? 1 : gx) }; // if strong scaling, devide by g{x,y,z}
+constexpr long ny_ { 512 / gy * (strong ? 1 : gy) };
+constexpr long nz_ { 512 / gz * (strong ? 1 : gz) };
 template<long L> struct enough_type { using type = 
   typename util::conditional<(L > std::numeric_limits<int>::max()), long, int>::type;
 };
-using aint = typename enough_type<nx_ * ny_ * nz_ * gx * gy * gz>::type;
+using aint = typename enough_type<Q* nx_ * ny_ * nz_ * gx * gy * gz>::type;
 //using aint = long;
 
 constexpr aint nx { nx_ };
@@ -59,7 +60,7 @@ constexpr aint nz { nz_ };
 constexpr aint NX { nx*gx };
 constexpr aint NY { ny*gy };
 constexpr aint NZ { nz*gz };
-constexpr aint elem { NX*NY*NZ };
+constexpr aint elem { Q*NX*NY*NZ };
 
 // gpu kernel
 constexpr int nth { 1024 };
@@ -80,29 +81,6 @@ __global__ void init(float* dst, float* src, const int gpu) {
 
 __device__ __forceinline__ long idx(const int& i, const int& j, const int& k, const int& I, const int& J, const int& K) {
   return i + nx*(j + ny*(k + nz*(I + gx*(J + gy*K))));
-}
-
-__global__ void foo(float *const dst, const float *const src, const int I, const int J, const int K) {
-  const long i = threadIdx.x + blockIdx.x*blockDim.x;
-  const long j = threadIdx.y + blockIdx.y*blockDim.y;
-  const long k = threadIdx.z + blockIdx.z*blockDim.z;
-  long im = i-1, ip = i+1, jm = j-1, jp = j+1, km = k-1, kp = k+1;
-  long IM = I, IP = I, JM = J, JP = J, KM = K, KP = K;
-  if(im < 0) { im = nx-1; IM = (I-1+gx)%gx; }
-  if(ip >= nx) { ip = 0; IP = (I+1)%gx; }
-  if(jm < 0) { jm = ny-1; JM = (J-1+gy)%gy; } 
-  if(jp >= ny) { jp = 0; JP = (J+1)%gy; }
-  if(km < 0) { km = nz-1; KM = (K-1+gz)%gz; }
-  if(kp >= nz) { kp = 0; KP = (K+1)%gz; }
-  const long ijk = idx(i, j, k, I, J, K);
-  const long je[6] = { idx(im, j, k, IM, J, K),
-    idx(ip, j, k, IP, J, K),
-    idx(i, jm, k, I, JM, K),
-    idx(i, jp, k, I, JP, K),
-    idx(i, j, km, I, J, KM),
-    idx(i, j, kp, I, J, KP) };
-  const float cc = 0.1f;
-  dst[ijk] = (1.f-6.f*cc)*src[ijk] + cc*(src[je[0]] + src[je[1]] + src[je[2]] + src[je[3]] + src[je[4]] +src[je[5]]);
 }
 
 int main(int argc, char** argv) try {
@@ -149,7 +127,12 @@ int main(int argc, char** argv) try {
       util::invoke_device<<<elem/num_gpu/nth, nth>>>(
         [=]__device__(real* buf1, real* buf2) {
           const aint ijk = threadIdx.x + blockIdx.x*blockDim.x + gi*blockDim.x*gridDim.x;
-          buf1[ijk] = buf2[ijk] = ijk;
+          const int q = (ijk % (elem/num_gpu)) / (elem/num_gpu/27);
+          const int ci = q%3 -1;
+          const int cj = (q/3)%3 -1;
+          const int ck = q/9 -1;
+          constexpr real weight[4] { 8.f/27.f, 2.f/27.f, 1.f/54.f, 1.f/216.f };
+          buf1[ijk] = buf2[ijk] = weight[ci*ci + cj*cj + ck*ck];
         }, dst.data(), src.data()
       );
     }
@@ -177,11 +160,6 @@ int main(int argc, char** argv) try {
     double bw_max = -1, mlups_max = -1;
     for(int tt=0; tt<iiter; tt++) {
       util::timer timer;
-      if(tt % (iiter/2) == 0) { // retouch
-        for(aint i=0; i<elem; i++) {
-          src[i] = dst[i] = i;
-        }
-      }
       timer.elapse("foo", [&]() {
         for(int t=0; t<iter; t++) {
           dst.swap(src);
@@ -197,26 +175,48 @@ int main(int argc, char** argv) try {
                 auto& I = gi;
                 auto& J = gj;
                 auto& K = gk;
-                aint im = i-1, ip = i+1, jm = j-1, jp = j+1, km = k-1, kp = k+1;
-                aint IM = I, IP = I, JM = J, JP = J, KM = K, KP = K;
-                if(im < 0) { im = nx-1; IM = (I-1+gx)%gx; }
-                if(ip >= nx) { ip = 0; IP = (I+1)%gx; }
-                if(jm < 0) { jm = ny-1; JM = (J-1+gy)%gy; } 
-                if(jp >= ny) { jp = 0; JP = (J+1)%gy; }
-                if(km < 0) { km = nz-1; KM = (K-1+gz)%gz; }
-                if(kp >= nz) { kp = 0; KP = (K+1)%gz; }
-                auto idx = []__device__(aint i, aint j, aint k, aint I, aint J, aint K) {
-                  return i + nx*(j + ny*(k + nz*(I + gx*(J + gy*K))));
+                auto idx = []__device__(aint i, aint j, aint k, aint I, aint J, aint K, int q) {
+                  return (i + nx*(j + ny*(k + nz*(q + Q*(I + gx*(J + gy*K))))));
                 };
-                const aint ijk = idx(i, j, k, I, J, K);
-                const aint je[6] = { idx(im, j, k, IM, J, K),
-                                 idx(ip, j, k, IP, J, K),
-                                 idx(i, jm, k, I, JM, K),
-                                 idx(i, jp, k, I, JP, K),
-                                 idx(i, j, km, I, J, KM),
-                                 idx(i, j, kp, I, J, KP) };
-                const real cc = 0.1f;
-                buf1[ijk] = (1.f-6.f*cc)*buf2[ijk] + cc*(buf2[je[0]] + buf2[je[1]] + buf2[je[2]] + buf2[je[3]] + buf2[je[4]] +buf2[je[5]]);
+                real f[Q], rho=0.f, u=0.f, v=0.f, w=0.f;
+                #pragma unroll
+                for(int q=0; q<Q; q++) {
+                  const int ci = q%3 -1;
+                  const int cj = (q/3)%3 -1;
+                  const int ck = q/9 -1;
+                  aint ii = i - ci, II = I;
+                  if(ii < 0) { ii = nx-1; II = (I-1+gx)%gx; }
+                  if(ii >= nx) { ii = 0; II = (I+1)%gx; }
+                  aint jj = j - cj, JJ = J; 
+                  if(jj < 0) { jj = ny-1; JJ = (J-1+gy)%gy; } 
+                  if(jj >= ny) { jj = 0; JJ = (J+1)%gy; }
+                  aint kk = k - ck, KK = K;
+                  if(kk < 0) { kk = nz-1; KK = (K-1+gz)%gz; }
+                  if(kk >= nz) { kk = 0; KK = (K+1)%gz; }
+                  f[q] = buf2[idx(ii,jj,kk,II,JJ,KK,q)];
+                  rho += f[q];
+                  u += ci*f[q];
+                  v += cj*f[q];
+                  w += ck*f[q];
+                }
+                const real ir = 1.f/rho;
+                u *= ir;
+                v *= ir;
+                w *= ir;
+                #pragma unroll
+                for(int q=0; q<Q; q++) {
+                  const int ci = q%3 -1;
+                  const int cj = (q/3)%3 -1;
+                  const int ck = q/9 -1;
+                  constexpr real weight[4] { 8.f/27.f, 2.f/27.f, 1.f/54.f, 1.f/216.f };
+                  constexpr real omega = 1.6;
+                  const int cc = ci*ci + cj*cj + ck*ck;
+                  const real uc = ci*u + cj*v + ck*w;
+                  const real uu =  u*u +  v*v +  w*w;
+                  const real feq = weight[cc] * rho * (1.f + 3.f*uc + 4.5f*uc*uc - 1.5f*uu);
+                  f[q] = f[q] - omega*(f[q] - feq);
+                  buf1[idx(i, j, k, I, J, K, q)] = f[q];
+                }
               }, dst.data(), src.data()
             );
           }
@@ -229,7 +229,7 @@ int main(int argc, char** argv) try {
       const double bw_cache = 2.* elem* sizeof(real)* iter / timer["foo"] / 1024. / 1024. / 1024.;
       bw_max = std::max(bw_max, bw_cache);
       std::cout << "bandwidth: " << bw_max << " GiB/s max, " << bw_cache << " GiB/s recent" << std::endl;
-      const double mlups_cache = double(elem)* iter / timer["foo"] / 1e6f;
+      const double mlups_cache = double(NX*NY*NZ)* iter / timer["foo"] / 1e6f;
       mlups_max = std::max(mlups_max, mlups_cache);
       std::cout << "performance: " << mlups_max << " MLUPS max, " << mlups_cache << " MLUPS recent" << std::endl;
     }
