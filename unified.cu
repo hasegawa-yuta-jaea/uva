@@ -124,15 +124,28 @@ int main(int argc, char** argv) try {
       std::cout << "." << std::flush;
       cudaSetDevice(gpu[gi]);
       //init<<<elem/num_gpu/nth, nth>>>(dst.data(), src.data(), gi);
-      util::invoke_device<<<elem/num_gpu/nth, nth>>>(
+      util::invoke_device<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(
         [=]__device__(real* buf1, real* buf2) {
-          const aint ijk = threadIdx.x + blockIdx.x*blockDim.x + gi*blockDim.x*gridDim.x;
-          const int q = (ijk % (elem/num_gpu)) / (elem/num_gpu/27);
-          const int ci = q%3 -1;
-          const int cj = (q/3)%3 -1;
-          const int ck = q/9 -1;
-          constexpr real weight[4] { 8.f/27.f, 2.f/27.f, 1.f/54.f, 1.f/216.f };
-          buf1[ijk] = buf2[ijk] = weight[ci*ci + cj*cj + ck*ck];
+          const aint i = threadIdx.x + blockIdx.x*blockDim.x;
+          const aint j = threadIdx.y + blockIdx.y*blockDim.y;
+          const aint k = threadIdx.z + blockIdx.z*blockDim.z;
+          const aint I = gi%gx;
+          const aint J = (gi/gx)%gy;
+          const aint K = gi/gx/gy;
+          auto idx = []__device__(aint i, aint j, aint k, aint I, aint J, aint K, int q) {
+            return (i + nx*(j + ny*(k + nz*(q + Q*(I + gx*(J + gy*K))))));
+          };
+          #pragma unroll
+          for(int q=0; q<Q; q++) {
+            const int ci = q%3 -1;
+            const int cj = (q/3)%3 -1;
+            const int ck = q/9 -1;
+            const int cc = ci*ci + cj*cj + ck*ck;
+            constexpr real weight[4] { 8.f/27.f, 2.f/27.f, 1.f/54.f, 1.f/216.f };
+            const real feq = weight[cc];
+            const aint ijkIJKq = idx(i, j, k, I, J, K, q);
+            buf1[ijkIJKq] = buf2[ijkIJKq] = feq;
+          }
         }, dst.data(), src.data()
       );
     }
@@ -245,8 +258,8 @@ int main(int argc, char** argv) try {
   }
 
   for(aint max=0, min=std::numeric_limits<aint>::max(), i=0; i<elem; i++) {
-    max = std::max(max, dst[i]);
-    min = std::min(min, dst[i]);
+    max = std::max(max, dst[i]*1e5f);
+    min = std::min(min, dst[i]*1e5f);
     if(i == elem-1) { std::cout << "dst = " << min << " -- " << max << std::endl; }
   }
 
