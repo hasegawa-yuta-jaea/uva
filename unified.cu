@@ -36,14 +36,14 @@ namespace std {
 using real = float;
 
 // multi-gpu
-constexpr int gx { 16 };
+constexpr int gx { 1 };
 constexpr int gy { 1  };
-constexpr int gz { 1  };
+constexpr int gz { 16  };
 constexpr int num_gpu { gx*gy*gz };
 constexpr int gpu[] { 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 };
 
 // grid
-constexpr bool strong { false };
+constexpr bool strong { true };
 constexpr int Q { 27 };
 constexpr long nx_ { 512 / gx * (strong ? 1 : gx) }; // if strong scaling, devide by g{x,y,z}
 constexpr long ny_ { 512 / gy * (strong ? 1 : gy) };
@@ -63,9 +63,9 @@ constexpr aint NZ { nz*gz };
 constexpr aint elem { Q*NX*NY*NZ };
 
 // gpu kernel
-constexpr int nth { 1024 };
-constexpr int tx { std::gcd(128, nx) };
-constexpr int ty { std::gcd(4, ny) };
+constexpr int nth { 256 };
+constexpr int tx { std::gcd(256, nx) };
+constexpr int ty { std::gcd(nth/tx, ny) };
 constexpr int tz { std::gcd(nth/tx/ty, nz) };
 static_assert(nth == tx*ty*tz, "check blockDim.{x,y,z}");
 
@@ -148,6 +148,7 @@ int main(int argc, char** argv) try {
           }
         }, dst.data(), src.data()
       );
+      CUCHECK();
     }
     std::cout << std::endl;
     std::cout << "first_touch_sync" << std::flush;
@@ -232,6 +233,7 @@ int main(int argc, char** argv) try {
                 }
               }, dst.data(), src.data()
             );
+            CUCHECK();
           }
           for(int i=0; i<num_gpu; i++) {
             cudaSetDevice(gpu[i]);
