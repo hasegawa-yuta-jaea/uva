@@ -1,3 +1,20 @@
+// measure
+constexpr bool madvise { true };
+constexpr int iter { 2 };
+constexpr int iiter { 10 };
+// multi-gpu
+constexpr int gx { 16 };
+constexpr int gy { 1  };
+constexpr int gz { 1  };
+constexpr int num_gpu { gx*gy*gz };
+constexpr int gpu[] { 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 };
+// grid
+constexpr bool strong { true };
+constexpr long nx_ { 512 / gx * (strong ? 1 : gx) }; // if strong scaling, devide by g{x,y,z}
+constexpr long ny_ { 512 / gy * (strong ? 1 : gy) };
+constexpr long nz_ { 512 / gz * (strong ? 1 : gz) };
+constexpr int Q { 27 }; // LBM
+
 #include <cuda.h>
 #include <cuda_profiler_api.h>
 #include <thrust/extrema.h>
@@ -36,19 +53,6 @@ namespace std {
 
 using real = float;
 
-// multi-gpu
-constexpr int gx { 16 };
-constexpr int gy { 1  };
-constexpr int gz { 1  };
-constexpr int num_gpu { gx*gy*gz };
-constexpr int gpu[] { 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 };
-
-// grid
-constexpr bool strong { true };
-constexpr int Q { 27 };
-constexpr long nx_ { 512 / gx * (strong ? 1 : gx) }; // if strong scaling, devide by g{x,y,z}
-constexpr long ny_ { 512 / gy * (strong ? 1 : gy) };
-constexpr long nz_ { 512 / gz * (strong ? 1 : gz) };
 template<long L> struct enough_type { using type = 
   typename util::conditional<(L > std::numeric_limits<int>::max()), long, int>::type;
 };
@@ -69,11 +73,6 @@ constexpr int tx { std::gcd(128, nx) };
 constexpr int ty { std::gcd(4, ny) };
 constexpr int tz { std::gcd(nth/tx/ty, nz) };
 static_assert(nth == tx*ty*tz, "check blockDim.{x,y,z}");
-
-// measure
-constexpr int iter { 2 };
-constexpr int iiter { 10 };
-
 
 __global__ void init(float* dst, float* src, const int gpu) {
     const long k = threadIdx.x + blockIdx.x*blockDim.x + gpu*blockDim.x*gridDim.x;
@@ -104,23 +103,25 @@ int main(int argc, char** argv) try {
   timer.elapse("init", [&]() {
     const size_t memall = elem * sizeof(real);
     const size_t memgpu = memall / num_gpu;
-    std::cout << "memadviseAccessedBy" << std::flush;
-    for(int i=0; i<num_gpu; i++) {
-      std::cout << "." << std::flush;
-      cudaMemAdvise(dst.data(), memall, cudaMemAdviseSetAccessedBy, gpu[i]);
-      cudaMemAdvise(src.data(), memall, cudaMemAdviseSetAccessedBy, gpu[i]);
+    if(madvise) {
+      std::cout << "memadviseAccessedBy" << std::flush;
+      for(int i=0; i<num_gpu; i++) {
+        std::cout << "." << std::flush;
+        cudaMemAdvise(dst.data(), memall, cudaMemAdviseSetAccessedBy, gpu[i]);
+        cudaMemAdvise(src.data(), memall, cudaMemAdviseSetAccessedBy, gpu[i]);
+      }
+      std::cout << std::endl;
+      std::cout << "memadvisePreferredLocation" << std::flush;
+      for(int i=0; i<num_gpu; i++) {
+        std::cout << "." << std::flush;
+        const size_t ofs = elem*i/num_gpu;
+        cudaMemAdvise(dst.data() + ofs, memgpu, cudaMemAdviseSetPreferredLocation, gpu[i]);
+        cudaMemAdvise(src.data() + ofs, memgpu, cudaMemAdviseSetPreferredLocation, gpu[i]);
+        cudaMemPrefetchAsync(dst.data() + ofs, memgpu, gpu[i]);
+        cudaMemPrefetchAsync(src.data() + ofs, memgpu, gpu[i]);
+      }
+      std::cout << std::endl;
     }
-    std::cout << std::endl;
-    std::cout << "memadvisePreferredLocation" << std::flush;
-    for(int i=0; i<num_gpu; i++) {
-      std::cout << "." << std::flush;
-      const size_t ofs = elem*i/num_gpu;
-      cudaMemAdvise(dst.data() + ofs, memgpu, cudaMemAdviseSetPreferredLocation, gpu[i]);
-      cudaMemAdvise(src.data() + ofs, memgpu, cudaMemAdviseSetPreferredLocation, gpu[i]);
-      cudaMemPrefetchAsync(dst.data() + ofs, memgpu, gpu[i]);
-      cudaMemPrefetchAsync(src.data() + ofs, memgpu, gpu[i]);
-    }
-    std::cout << std::endl;
     std::cout << "first_touch" << std::flush;
     for(int gi=0; gi<num_gpu; gi++) {
       std::cout << "." << std::flush;
@@ -161,6 +162,7 @@ int main(int argc, char** argv) try {
     }
     std::cout << std::endl;
   });
+
 //  timer.elapse("init-id", [&]() {
 //    std::cout << "init-id by cpu..." << std::flush;
 //    for(aint i=0; i<id_list.size(); i++) {
