@@ -2,6 +2,7 @@
 constexpr bool madvise { true };
 constexpr int iter { 2 };
 constexpr int iiter { 10 };
+#define NODEBUG
 // multi-gpu
 constexpr int gx { 16 };
 constexpr int gy { 1  };
@@ -275,6 +276,7 @@ int main(int argc, char** argv) try {
       std::cout << "performance: " << mlups_max << " MLUPS max, " << mlups_cache << " MLUPS recent" << std::endl;
     }
   });
+  cudaProfilerStop();
 
   std::cout << std::endl;
   for(int i=0; i<num_gpu; i++) {
@@ -289,7 +291,7 @@ int main(int argc, char** argv) try {
   for(int i=0; i<num_gpu; i++) {
     const aint begin = dst.size()*i / num_gpu;
     const aint end   = dst.size()*(i+1) / num_gpu;
-    cudaSetDevice(i);
+    cudaSetDevice(gpu[i]);
     min = std::min(min, *thrust::min_element(thrust::device, dst.data() + begin, dst.data() + end));
     max = std::max(max, *thrust::max_element(thrust::device, dst.data() + begin, dst.data() + end));
   }
@@ -298,7 +300,6 @@ int main(int argc, char** argv) try {
   timer.elapse("fina-GPU", [&]() {
     src.reset();
     dst.reset();
-    cudaProfilerStop();
     cudaDeviceReset();
   });
 

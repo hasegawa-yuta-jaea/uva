@@ -12,13 +12,16 @@ NVFLAGS += -maxrregcount=64
 NVFLAGS += -Xcompiler="-Wall -Wextra"
 NVFLAGS += -Xptxas="-warn-double-usage -warn-lmem-usage -warn-spills"
 
-all: clean $(PROG) do
+all: clean $(PROG) prof
 
 $(PROG): unified.cu
 	nvcc unified.cu -o $(PROG) $(NVFLAGS)
 
-do:
+do: $(PROG)
 	./$(PROG)
+
+prof: $(PROG)
+	sh prof.sh
 
 clean:
 	-rm -f $(PROG)
