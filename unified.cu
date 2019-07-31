@@ -1,5 +1,6 @@
 #include <cuda.h>
 #include <cuda_profiler_api.h>
+#include <thrust/extrema.h>
 #include <cstdio>
 #include <iostream>
 #include <iomanip>
@@ -36,9 +37,9 @@ namespace std {
 using real = float;
 
 // multi-gpu
-constexpr int gx { 1 };
+constexpr int gx { 16 };
 constexpr int gy { 1  };
-constexpr int gz { 16  };
+constexpr int gz { 1  };
 constexpr int num_gpu { gx*gy*gz };
 constexpr int gpu[] { 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 };
 
@@ -63,9 +64,9 @@ constexpr aint NZ { nz*gz };
 constexpr aint elem { Q*NX*NY*NZ };
 
 // gpu kernel
-constexpr int nth { 256 };
-constexpr int tx { std::gcd(256, nx) };
-constexpr int ty { std::gcd(nth/tx, ny) };
+constexpr int nth { 1024 };
+constexpr int tx { std::gcd(128, nx) };
+constexpr int ty { std::gcd(4, ny) };
 constexpr int tz { std::gcd(nth/tx/ty, nz) };
 static_assert(nth == tx*ty*tz, "check blockDim.{x,y,z}");
 
@@ -88,8 +89,8 @@ int main(int argc, char** argv) try {
   static_cast<void>(argv);
 
   std::cout << " aint = " << typeid(aint).name() << std::endl;
-  std::cout << "total mem = " << 2l*elem*sizeof(real) / 1024/1024/1024. << " GiB" << std::endl;
-  std::cout << "  per gpu = " << 2l*elem*sizeof(real) / 1024/1024/1024./num_gpu << " GiB" << std::endl;
+  std::cout << "total mem = " << 2l*elem*sizeof(real) / 1024/1024/1024.         << " + " << elem*sizeof(aint)/1024/1024/1024. << " GiB" << std::endl;
+  std::cout << "  per gpu = " << 2l*elem*sizeof(real) / 1024/1024/1024./num_gpu << " + " << elem*sizeof(aint)/1024/1024/1024. << " GiB" << std::endl;
   std::cout << "total mesh = (" << NX << ", " << NY << ", " << NZ << ")" << std::endl;
   std::cout << "  partition= (" << gx << ", " << gy << ", " << gz << ")" << std::endl;
   std::cout << "  per gpu  = (" << nx << ", " << ny << ", " << nz << ")" << std::endl;
@@ -97,6 +98,7 @@ int main(int argc, char** argv) try {
 
   util::timer timer;
   util::cu_ptr<real> src(elem), dst(elem);
+//  util::cu_ptr<aint> id_list(elem);
 
   std::cout << "step: init" << std::endl;
   timer.elapse("init", [&]() {
@@ -123,7 +125,7 @@ int main(int argc, char** argv) try {
     for(int gi=0; gi<num_gpu; gi++) {
       std::cout << "." << std::flush;
       cudaSetDevice(gpu[gi]);
-      //init<<<elem/num_gpu/nth, nth>>>(dst.data(), src.data(), gi);
+//      init<<<elem/num_gpu/nth, nth>>>(dst.data(), src.data(), gi);
       util::invoke_device<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(
         [=]__device__(real* buf1, real* buf2) {
           const aint i = threadIdx.x + blockIdx.x*blockDim.x;
@@ -159,6 +161,27 @@ int main(int argc, char** argv) try {
     }
     std::cout << std::endl;
   });
+//  timer.elapse("init-id", [&]() {
+//    std::cout << "init-id by cpu..." << std::flush;
+//    for(aint i=0; i<id_list.size(); i++) {
+//      id_list[i] = i;
+//    }
+//    std::cout << std::endl;
+//    const size_t memall = elem * sizeof(aint);
+//    std::cout << "memadviseAccessedBy" << std::flush;
+//    for(int i=0; i<num_gpu; i++) {
+//      std::cout << "." << std::flush;
+//      cudaMemAdvise(id_list.data(), memall, cudaMemAdviseSetAccessedBy, gpu[i]);
+//    }
+//    std::cout << std::endl;
+//    std::cout << "memadviseReadMostly" << std::flush;
+//    for(int i=0; i<num_gpu; i++) {
+//      std::cout << "." << std::flush;
+//      cudaMemAdvise(id_list.data(), memall, cudaMemAdviseSetReadMostly, gpu[i]);
+//      cudaMemPrefetchAsync(id_list.data(), memall, gpu[i]);
+//    }
+//    std::cout << std::endl;
+//  });
 
   for(int i=0; i<num_gpu; i++) {
     size_t mfree, mtotal;
@@ -182,7 +205,7 @@ int main(int argc, char** argv) try {
             cudaSetDevice(gpu[gi + gx*(gj + gy*gk)]);
             //foo<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(dst.data(), src.data(), gi,gj,gk);
             util::invoke_device<<<dim3(nx/tx, ny/ty, nz/tz), dim3(tx, ty, tz)>>>(
-              [=]__device__(real* buf1, const real* buf2) {
+              [=]__device__(real* buf1, const real* buf2) { //, const aint* id) {//
                 const aint i = threadIdx.x + blockIdx.x*blockDim.x;
                 const aint j = threadIdx.y + blockIdx.y*blockDim.y;
                 const aint k = threadIdx.z + blockIdx.z*blockDim.z;
@@ -207,6 +230,7 @@ int main(int argc, char** argv) try {
                   aint kk = k - ck, KK = K;
                   if(kk < 0) { kk = nz-1; KK = (K-1+gz)%gz; }
                   if(kk >= nz) { kk = 0; KK = (K+1)%gz; }
+//                  f[q] = buf2[id[idx(ii,jj,kk,II,JJ,KK,q)]];
                   f[q] = buf2[idx(ii,jj,kk,II,JJ,KK,q)];
                   rho += f[q];
                   u += ci*f[q];
@@ -231,7 +255,7 @@ int main(int argc, char** argv) try {
                   f[q] = f[q] - omega*(f[q] - feq);
                   buf1[idx(i, j, k, I, J, K, q)] = f[q];
                 }
-              }, dst.data(), src.data()
+              }, dst.data(), src.data()//id_list.data()//
             );
             CUCHECK();
           }
@@ -241,7 +265,7 @@ int main(int argc, char** argv) try {
           }
         }
       });
-      const double bw_cache = 2.* elem* sizeof(real)* iter / timer["foo"] / 1024. / 1024. / 1024.;
+      const double bw_cache = elem* 2.*sizeof(real)* iter / timer["foo"] / 1024. / 1024. / 1024.;
       bw_max = std::max(bw_max, bw_cache);
       std::cout << "bandwidth: " << bw_max << " GiB/s max, " << bw_cache << " GiB/s recent" << std::endl;
       const double mlups_cache = double(NX*NY*NZ)* iter / timer["foo"] / 1e6f;
@@ -259,11 +283,15 @@ int main(int argc, char** argv) try {
       << std::setw(4) << double(mtotal - mfree) /1024./1024./1024. << " GiB used" << std::endl;
   }
 
-  for(aint max=0, min=std::numeric_limits<aint>::max(), i=0; i<elem; i++) {
-    max = std::max(max, dst[i]*1e5f);
-    min = std::min(min, dst[i]*1e5f);
-    if(i == elem-1) { std::cout << "dst = " << min << " -- " << max << std::endl; }
+  double min = dst[0], max = min;
+  for(int i=0; i<num_gpu; i++) {
+    const aint begin = dst.size()*i / num_gpu;
+    const aint end   = dst.size()*(i+1) / num_gpu;
+    cudaSetDevice(i);
+    min = std::min(min, *thrust::min_element(thrust::device, dst.data() + begin, dst.data() + end));
+    max = std::max(max, *thrust::max_element(thrust::device, dst.data() + begin, dst.data() + end));
   }
+  std::cout << "dst = " << min << " -- " << max << std::endl;
 
   timer.elapse("fina-GPU", [&]() {
     src.reset();
@@ -275,10 +303,13 @@ int main(int argc, char** argv) try {
   timer.showall();
 
   return 0;
-} catch (const std::runtime_error& e) {
-  std::cerr << "fatal: " << e.what() << std::endl;
+} catch (const thrust::system_error& e) {
+  std::cerr << "system_error in thrust: " << e.what() << std::endl;
   return 1;
+} catch (const std::runtime_error& e) {
+  std::cerr << "runtime_error: " << e.what() << std::endl;
+  return 9;
 } catch (...) {
-  std::cerr << "fatal: unknown error" << std::endl;
-  return 2;
+  std::cerr << "fatal: uncaught error" << std::endl;
+  return 10;
 }

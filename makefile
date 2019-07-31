@@ -7,8 +7,10 @@ NVFLAGS += --generate-code arch=compute_70,code=sm_70
 NVFLAGS += -O2
 NVFLAGS += -std=c++11 --expt-extended-lambda
 NVFLAGS += -lineinfo
-NVFLAGS += -Xptxas=-v
+NVFLAGS += -maxrregcount=64
+#NVFLAGS += -Xptxas=-v
 NVFLAGS += -Xcompiler="-Wall -Wextra"
+NVFLAGS += -Xptxas="-warn-double-usage -warn-lmem-usage -warn-spills"
 
 all: clean $(PROG) do
 
