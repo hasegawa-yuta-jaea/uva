@@ -3,7 +3,8 @@ PROG:=run
 .PHONY: all clean do
 
 NVFLAGS += --generate-code arch=compute_70,code=sm_70
-#NVFLAGS += --generate-code arch=compute_60,code=sm_60
+NVFLAGS += --generate-code arch=compute_60,code=sm_60
+NVFLAGS += -ccbin=mpic++
 NVFLAGS += -O2
 NVFLAGS += -std=c++11 --expt-extended-lambda
 NVFLAGS += -lineinfo
@@ -12,16 +13,13 @@ NVFLAGS += -maxrregcount=64
 NVFLAGS += -Xcompiler="-Wall -Wextra"
 NVFLAGS += -Xptxas="-warn-double-usage -warn-lmem-usage -warn-spills"
 
-all: clean $(PROG) prof
+all: clean $(PROG) do
 
 $(PROG): unified.cu
 	nvcc unified.cu -o $(PROG) $(NVFLAGS)
 
 do: $(PROG)
-	./$(PROG)
-
-prof: $(PROG)
-	sh prof.sh
+	mpirun -n 2 ./$(PROG)
 
 clean:
 	-rm -f $(PROG)
