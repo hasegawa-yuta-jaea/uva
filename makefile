@@ -1,25 +1,30 @@
-PROG:=run
-
-ifeq ("$(shell which nvidia-smi 2>/dev/null)", "")
-  TARGET:= r
-else
-ifeq ("$(shell hostname)", "jdgx2")
-  TARGET:= j
-else
-  TARGET:= $(PROG)
-endif
-endif
+PROG:= run
+TARGET:= $(PROG)
 
 .PHONY: all r j
 
-all: $(TARGET)
+all: $(TARGET) do
 
 $(PROG): unified.cu
 	nvcc -O2 -std=c++11 -arch sm_70 --compiler-bindir=g++ --compiler-options="-O2 -std=c++11" unified.cu -o run
 
-j: $(PROG)
-	qsub jd.qsub
-	tail -F result.txt
+do: $(PROG)
+	./$(PROG)
 
-r:
-	./remote jd
+do_iter: $(PROG)
+	CUDA_VISIBLE_DEVICES=0  ./$(PROG)
+	CUDA_VISIBLE_DEVICES=1  ./$(PROG)
+	CUDA_VISIBLE_DEVICES=2  ./$(PROG)
+	CUDA_VISIBLE_DEVICES=3  ./$(PROG)
+	CUDA_VISIBLE_DEVICES=4  ./$(PROG)
+	CUDA_VISIBLE_DEVICES=5  ./$(PROG)
+	CUDA_VISIBLE_DEVICES=6  ./$(PROG)
+	CUDA_VISIBLE_DEVICES=7  ./$(PROG)
+	CUDA_VISIBLE_DEVICES=8  ./$(PROG)
+	CUDA_VISIBLE_DEVICES=9  ./$(PROG)
+	CUDA_VISIBLE_DEVICES=10 ./$(PROG)
+	CUDA_VISIBLE_DEVICES=11 ./$(PROG)
+	CUDA_VISIBLE_DEVICES=12 ./$(PROG)
+	CUDA_VISIBLE_DEVICES=13 ./$(PROG)
+	CUDA_VISIBLE_DEVICES=14 ./$(PROG)
+	CUDA_VISIBLE_DEVICES=15 ./$(PROG)
