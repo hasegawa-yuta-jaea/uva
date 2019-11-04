@@ -3,9 +3,9 @@ constexpr int iter { 2 };
 constexpr int iiter { 10 };
 //#define NODEBUG
 // multi-gpu
-constexpr int gx { 2 };
+constexpr int gx { 1 };
 constexpr int gy { 1  };
-constexpr int gz { 1  };
+constexpr int gz { 16  };
 constexpr int num_gpu { gx*gy*gz };
 constexpr int gpu[] { 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 };
 // grid
@@ -19,6 +19,7 @@ constexpr int Qmpi { 27 }; // lbm mpi send at surface (torima all, future work o
 #include <cuda.h>
 #include <cuda_profiler_api.h>
 #include <thrust/extrema.h>
+#include <thrust/device_ptr.h>
 #include <cstdio>
 #include <iostream>
 #include <fstream>
@@ -34,6 +35,7 @@ constexpr int Qmpi { 27 }; // lbm mpi send at surface (torima all, future work o
 #include "util/conditional.hpp"
 #include "util/invoker.hpp"
 #include "util/mpi_safe_call.hpp"
+#include "util/cu_device_ptr.hpp"
 
 // #include <numeric> // c++17 gcd
 #include <type_traits>
@@ -60,15 +62,15 @@ using real = float;
 template<long L> struct enough_type { using type = 
   typename util::conditional<(L > std::numeric_limits<int>::max()), long, int>::type;
 };
-using aint = typename enough_type<Q* (nx_ +2) * (ny_ +2) * (nz_ +2)>::type;
-//using aint = long;
+//using aint = typename enough_type<Q* (nx_ +2) * (ny_ +2) * (nz_ +2)>::type;
+using aint = long;
 
-constexpr aint hx { gx > 1 ? 2 : 0 }; // halo
-constexpr aint hy { gy > 1 ? 2 : 0 }; // halo
-constexpr aint hz { gz > 1 ? 2 : 0 }; // halo
-constexpr aint nx { nx_ + hx }; 
-constexpr aint ny { ny_ + hy }; 
-constexpr aint nz { nz_ + hz }; 
+constexpr aint hx { gx > 1 ? 1 : 0 }; // halo
+constexpr aint hy { gy > 1 ? 1 : 0 }; // halo
+constexpr aint hz { gz > 1 ? 1 : 0 }; // halo
+constexpr aint nx { nx_ + 2*hx }; 
+constexpr aint ny { ny_ + 2*hy }; 
+constexpr aint nz { nz_ + 2*hz }; 
 constexpr aint elem { Q*nx*ny*nz };
 
 // gpu kernel
@@ -85,7 +87,7 @@ int main(int argc, char** argv) try {
   MPI_SAFE_CALL(MPI_Init(&argc, &argv));
   const auto&& mpirank = []() { int rank_; MPI_Comm_rank(MPI_COMM_WORLD, &rank_); return rank_; }();
   const auto&& mpisize = []() { int size_; MPI_Comm_size(MPI_COMM_WORLD, &size_); return size_; }();
-  assert(mpisize == num_gpu);
+  RUNTIME_ASSERT(mpisize == num_gpu);
   const int gpui = gpu[mpirank];
   cudaSetDevice(gpui);
 
@@ -94,23 +96,24 @@ int main(int argc, char** argv) try {
   MPI_SAFE_CALL(MPI_Barrier(MPI_COMM_WORLD));
 
   cout0 << " aint = " << typeid(aint).name() << std::endl;
-  cout0 << "total mem = " << 2l*elem*sizeof(real) / 1024/1024/1024.         << " + " << elem*sizeof(aint)/1024/1024/1024. << " GiB" << std::endl;
-  cout0 << "  per gpu = " << 2l*elem*sizeof(real) / 1024/1024/1024./num_gpu << " + " << elem*sizeof(aint)/1024/1024/1024. << " GiB" << std::endl;
+  cout0 << "total mem = " << 2l*elem*sizeof(real) / 1024/1024/1024.*num_gpu << " + " << elem*sizeof(aint)/1024/1024/1024. << " GiB" << std::endl;
+  cout0 << "  per gpu = " << 2l*elem*sizeof(real) / 1024/1024/1024.         << " + " << elem*sizeof(aint)/1024/1024/1024. << " GiB" << std::endl;
   cout0 << "total mesh = (" << nx_*gx << ", " << ny_*gy << ", " << nz_*gz << ")" << std::endl;
   cout0 << "  partition= (" << gx << ", " << gy << ", " << gz << ")" << std::endl;
   cout0 << "  per gpu  = (" << nx << ", " << ny << ", " << nz << ")" << std::endl;
   cout0 << "thread     = (" << tx << ", " << ty << ", " << tz << ")" << std::endl;
 
   util::timer timer;
-  util::cu_ptr<real> src(elem), dst(elem);
+  util::cu_device_ptr<real> src(nx*ny*nz*Q), dst(nx*ny*nz*Q);
   util::cu_device_ptr<real> 
-    buf_recv_w(hx/2 * ny * nz * Qmpi), buf_recv_e(hx/2 * ny * nz * Qmpi),
-    buf_recv_n(nx * hy/2 * nz * Qmpi), buf_recv_s(nx * hy/2 * nz * Qmpi),
-    buf_recv_b(nx * ny * hz/2 * Qmpi), buf_recv_t(nx * ny * hz/2 * Qmpi),
-    buf_send_w(hx/2 * ny * nz * Qmpi), buf_send_e(hx/2 * ny * nz * Qmpi),
-    buf_send_n(nx * hy/2 * nz * Qmpi), buf_send_s(nx * hy/2 * nz * Qmpi),
-    buf_send_b(nx * ny * hz/2 * Qmpi), buf_send_t(nx * ny * hz/2 * Qmpi);
+    buf_recv_w(hx * ny * nz * Qmpi), buf_recv_e(hx * ny * nz * Qmpi),
+    buf_recv_n(nx * hy * nz * Qmpi), buf_recv_s(nx * hy * nz * Qmpi),
+    buf_recv_b(nx * ny * hz * Qmpi), buf_recv_t(nx * ny * hz * Qmpi),
+    buf_send_w(hx * ny * nz * Qmpi), buf_send_e(hx * ny * nz * Qmpi),
+    buf_send_n(nx * hy * nz * Qmpi), buf_send_s(nx * hy * nz * Qmpi),
+    buf_send_b(nx * ny * hz * Qmpi), buf_send_t(nx * ny * hz * Qmpi);
 //  util::cu_ptr<aint> id_list(elem);
+  thrust::device_ptr<real> thrust_ptr_dst = thrust::device_pointer_cast(dst.data());
 
   cout0 << "step: init" << std::endl;
   timer.elapse("init", [&]() {
@@ -136,11 +139,13 @@ int main(int argc, char** argv) try {
     cout0 << std::endl;
     cout0 << "first_touch_sync" << std::flush;
     CUDA_SAFE_CALL(cudaDeviceSynchronize());
+    MPI_SAFE_CALL(MPI_Barrier(MPI_COMM_WORLD));
     cout0 << std::endl;
     const double 
-      min = *thrust::min_element(dst.data(), dst.data() + dst.size()),
-      max = *thrust::max_element(dst.data(), dst.data() + dst.size());
+      min = *thrust::min_element(thrust::device, thrust_ptr_dst, thrust_ptr_dst + dst.size()),
+      max = *thrust::max_element(thrust::device, thrust_ptr_dst, thrust_ptr_dst + dst.size());
     std::cout << "@rank " << mpirank << ": dst = " << min << " -- " << max << std::endl;
+    MPI_SAFE_CALL(MPI_Barrier(MPI_COMM_WORLD));
   });
 
   size_t mfree, mtotal;
@@ -184,9 +189,10 @@ int main(int argc, char** argv) try {
           if(hz > 0) {
             // z
             // pack-sendrecv bottom
-            constexpr aint size_z = nx_ * ny_ * sizeof(real);
-            CUCHECK({ util::invoke_device<<<dim3(nx_/tx, ny_/ty, 1), dim3(tx, ty, 1)>>> (
-                pack, buf_send_b.data(), dim3(nx_, ny_, 1), src.data(), dim3(1, 1, 1)); 
+            constexpr aint size_z = nx * ny * hz * Qmpi * sizeof(real);
+            static_assert(size_z <= std::numeric_limits<int>::max());
+            CUCHECK({ util::invoke_device<<<dim3(nx/tx+1, ny/ty+1, 1), dim3(tx, ty, 1)>>> (
+                pack, buf_send_b.data(), dim3(nx, ny, 1), src.data(), dim3(0, 0, 1)); 
             });
             CUDA_SAFE_CALL(cudaDeviceSynchronize());
             const int rank_send_b = (mpirank - gx*gy + mpisize) % mpisize;
@@ -194,8 +200,8 @@ int main(int argc, char** argv) try {
             const int rank_recv_b = (mpirank + gx*gy)           % mpisize;
             MPI_SAFE_CALL(MPI_Irecv(buf_recv_b.data(), size_z, MPI_BYTE, rank_recv_b, 0, MPI_COMM_WORLD, &req_recv[0]));
             // pack-sendrecv top
-            CUCHECK({ util::invoke_device<<<dim3(nx_/tx, ny_/ty, 1), dim3(tx, ty, 1)>>> (
-                pack, buf_send_t.data(), dim3(nx_, ny_, 1), src.data(), dim3(1, 1, nz-2));
+            CUCHECK({ util::invoke_device<<<dim3(nx/tx+1, ny/ty+1, 1), dim3(tx, ty, 1)>>> (
+                pack, buf_send_t.data(), dim3(nx, ny, 1), src.data(), dim3(0, 0, nz-2));
             });
             CUDA_SAFE_CALL(cudaDeviceSynchronize());
             const int rank_send_t = rank_recv_b;
@@ -204,22 +210,21 @@ int main(int argc, char** argv) try {
             MPI_SAFE_CALL(MPI_Irecv(buf_recv_t.data(), size_z, MPI_BYTE, rank_recv_t, 1,  MPI_COMM_WORLD, &req_recv[1]));
             // unpack
             MPI_SAFE_CALL(MPI_Wait(&req_send[0], &status_null)); MPI_SAFE_CALL(MPI_Wait(&req_recv[0], &status_null));
-            CUCHECK({ util::invoke_device<<<dim3(nx_/tx, ny_/ty, 1), dim3(tx, ty, 1)>>> (
-                unpack, src.data(), dim3(nx_, ny_, 1), buf_recv_b.data(), dim3(1, 1, nz-1)); 
+            CUCHECK({ util::invoke_device<<<dim3(nx/tx+1, ny/ty+1, 1), dim3(tx, ty, 1)>>> (
+                unpack, src.data(), dim3(nx, ny, 1), buf_recv_b.data(), dim3(0, 0, nz-1)); 
             });
             MPI_SAFE_CALL(MPI_Wait(&req_send[1], &status_null)); MPI_SAFE_CALL(MPI_Wait(&req_recv[1], &status_null));
-            CUCHECK({ util::invoke_device<<<dim3(nx_/tx, ny_/ty, 1), dim3(tx, ty, 1)>>> (
-                unpack, src.data(), dim3(nx_, ny_, 1), buf_recv_t.data(), dim3(1, 1, 0)); 
+            CUCHECK({ util::invoke_device<<<dim3(nx/tx+1, ny/ty+1, 1), dim3(tx, ty, 1)>>> (
+                unpack, src.data(), dim3(nx, ny, 1), buf_recv_t.data(), dim3(0, 0, 0)); 
             });
             CUDA_SAFE_CALL(cudaDeviceSynchronize());
           }
-          cout0 << ".z" << std::endl;
           if(hy > 0) {
             // y
             // pack-sendrecv south
-            constexpr aint size_y = nx_ * nz * sizeof(real);
-            CUCHECK({ util::invoke_device<<<dim3(nx_/tx, 1, (nz+ty-1)/ty), dim3(tx, 1, ty)>>> (
-                pack, buf_send_s.data(), dim3(nx_, 1, nz), src.data(), dim3(1, 1, 0)); 
+            constexpr aint size_y = nx * nz * Qmpi * sizeof(real);
+            CUCHECK({ util::invoke_device<<<dim3(nx/tx+1, 1, nz/ty+1), dim3(tx, 1, ty)>>> (
+                pack, buf_send_s.data(), dim3(nx, 1, nz), src.data(), dim3(0, 1, 0)); 
             });
             CUDA_SAFE_CALL(cudaDeviceSynchronize());
             const int rank_send_s = (mpirank - gx + mpisize) % mpisize;
@@ -227,8 +232,8 @@ int main(int argc, char** argv) try {
             const int rank_recv_s = (mpirank + gx) % mpisize;
             MPI_SAFE_CALL(MPI_Irecv(buf_recv_s.data(), size_y, MPI_BYTE, rank_recv_s, 0, MPI_COMM_WORLD, &req_recv[0]));
             // pack-sendrecv north
-            CUCHECK({ util::invoke_device<<<dim3(nx_/tx, 1, (nz+ty-1)/ty), dim3(tx, 1, ty)>>> (
-                pack, buf_send_n.data(), dim3(nx_, 1, nz), src.data(), dim3(1, ny-2, 0));
+            CUCHECK({ util::invoke_device<<<dim3(nx/tx+1, 1, nz/ty+1), dim3(tx, 1, ty)>>> (
+                pack, buf_send_n.data(), dim3(nx, 1, nz), src.data(), dim3(0, ny-2, 0));
             });
             CUDA_SAFE_CALL(cudaDeviceSynchronize());
             const int rank_send_n = rank_recv_s;
@@ -237,22 +242,21 @@ int main(int argc, char** argv) try {
             MPI_SAFE_CALL(MPI_Irecv(buf_recv_t.data(), size_y, MPI_BYTE, rank_recv_n, 1, MPI_COMM_WORLD, &req_recv[1]));
             // unpack
             MPI_SAFE_CALL(MPI_Wait(&req_send[0], &status_null)); MPI_SAFE_CALL(MPI_Wait(&req_recv[0], &status_null));
-            CUCHECK({ util::invoke_device<<<dim3(nx_/tx, 1, (nz+ty-1)/ty), dim3(tx, 1, ty)>>> (
-                unpack, src.data(), dim3(nx_, 1, nz), buf_recv_s.data(), dim3(1, ny-1, 0)); 
+            CUCHECK({ util::invoke_device<<<dim3(nx/tx+1, 1, nz/ty+1), dim3(tx, 1, ty)>>> (
+                unpack, src.data(), dim3(nx_, 1, nz), buf_recv_s.data(), dim3(0, ny-1, 0)); 
             });
             MPI_SAFE_CALL(MPI_Wait(&req_send[1], &status_null)); MPI_SAFE_CALL(MPI_Wait(&req_recv[1], &status_null));
-            CUCHECK({ util::invoke_device<<<dim3(nx_/tx, 1, (nz+ty-1)/ty), dim3(tx, 1, ty)>>> (
-                unpack, src.data(), dim3(nx_, 1, nz), buf_recv_n.data(), dim3(1, 0, 0)); 
+            CUCHECK({ util::invoke_device<<<dim3(nx/tx+1, 1, nz/ty+1), dim3(tx, 1, ty)>>> (
+                unpack, src.data(), dim3(nx, 1, nz), buf_recv_n.data(), dim3(0, 0, 0)); 
             });
             CUDA_SAFE_CALL(cudaDeviceSynchronize());
           }
-          cout0 << ".y" << std::endl;
           if(hx > 0) {
             // x
             // pack-sendrecv west
-            constexpr aint size_x = ny * nz * sizeof(real);
-            CUCHECK({ util::invoke_device<<<dim3(1, (ny+tx-1)/tx, (nz+ty-1)/ty), dim3(1, tx, ty)>>> (
-                pack, buf_send_w.data(), dim3(1, ny, nz), src.data(), dim3(1, 0, 0)); 
+            constexpr aint size_x = ny * nz * Qmpi * sizeof(real);
+            CUCHECK({ util::invoke_device<<<dim3(1, ny/tx+1, nz/ty+1), dim3(1, tx, ty)>>> (
+                pack, buf_send_w.data(), dim3(1, ny, nz), src.data(), dim3(0, 0, 0)); 
             });
             CUDA_SAFE_CALL(cudaDeviceSynchronize());
             const int rank_send_w = (mpirank - 1 + mpisize) % mpisize;
@@ -260,7 +264,7 @@ int main(int argc, char** argv) try {
             const int rank_recv_w = (mpirank + 1) % mpisize;
             MPI_SAFE_CALL(MPI_Irecv(buf_recv_w.data(), size_x, MPI_BYTE, rank_recv_w, 0, MPI_COMM_WORLD, &req_recv[0]));
             // pack-sendrecv east
-            CUCHECK({ util::invoke_device<<<dim3(1, (ny+tx-1)/tx, (nz+ty-1)/ty), dim3(1, tx, ty)>>> (
+            CUCHECK({ util::invoke_device<<<dim3(1, ny/tx+1, nz/ty+1), dim3(1, tx, ty)>>> (
                 pack, buf_send_e.data(), dim3(1, ny, nz), src.data(), dim3(nx-2, 0, 0));
             });
             CUDA_SAFE_CALL(cudaDeviceSynchronize());
@@ -270,24 +274,23 @@ int main(int argc, char** argv) try {
             MPI_SAFE_CALL(MPI_Irecv(buf_recv_e.data(), size_x, MPI_BYTE, rank_recv_e, 1, MPI_COMM_WORLD, &req_recv[1]));
             // unpack
             MPI_SAFE_CALL(MPI_Wait(&req_send[0], &status_null)); MPI_SAFE_CALL(MPI_Wait(&req_recv[0], &status_null));
-            CUCHECK({ util::invoke_device<<<dim3(1, (ny+tx-1)/tx, (nz+ty-1)/ty), dim3(1, tx, ty)>>> (
+            CUCHECK({ util::invoke_device<<<dim3(1, ny/tx+1, nz/ty+1), dim3(1, tx, ty)>>> (
                 unpack, src.data(), dim3(1, ny, nz), buf_recv_w.data(), dim3(nx-1, 0, 0)); 
             });
             MPI_SAFE_CALL(MPI_Wait(&req_send[1], &status_null)); MPI_SAFE_CALL(MPI_Wait(&req_recv[1], &status_null));
-            CUCHECK({ util::invoke_device<<<dim3(1, (ny+tx-1)/tx, (nz+ty-1)/ty), dim3(1, tx, ty)>>> (
+            CUCHECK({ util::invoke_device<<<dim3(1, ny/tx+1, nz/ty+1), dim3(1, tx, ty)>>> (
                 unpack, src.data(), dim3(1, ny, nz), buf_recv_e.data(), dim3(0, 0, 0)); 
             });
             CUDA_SAFE_CALL(cudaDeviceSynchronize());
           }
-          cout0 << ".x" << std::endl;
           // lbm
           CUCHECK({
             util::invoke_device<<<dim3(nx_/tx, ny_/ty, nz_/tz), dim3(tx, ty, tz)>>>(
               [=]__device__(real* buf1, const real* buf2) { //, const aint* id) {//
-                const aint i = threadIdx.x + blockIdx.x*blockDim.x + hx/2;
-                const aint j = threadIdx.y + blockIdx.y*blockDim.y + hy/2;
-                const aint k = threadIdx.z + blockIdx.z*blockDim.z + hz/2;
-                if(i >= nx-hx/2 || j >= ny-hy/2 || k >= nz-hz/2) return;
+                const aint i = threadIdx.x + blockIdx.x*blockDim.x + hx;
+                const aint j = threadIdx.y + blockIdx.y*blockDim.y + hy;
+                const aint k = threadIdx.z + blockIdx.z*blockDim.z + hz;
+                if(i >= nx-hx || j >= ny-hy || k >= nz-hz) return;
                 real f[Q], rho=0.f, u=0.f, v=0.f, w=0.f;
                 #pragma unroll
                 for(int q=0; q<Q; q++) {
@@ -327,7 +330,7 @@ int main(int argc, char** argv) try {
           CUDA_SAFE_CALL(cudaDeviceSynchronize());
         }
       });
-      const double bw_cache = elem* 2.*sizeof(real)* iter / timer["foo"] / 1024. / 1024. / 1024.;
+      const double bw_cache = nx_*ny_*nz_*Q*num_gpu* 2.*sizeof(real)* iter / timer["foo"] / 1024. / 1024. / 1024.;
       bw_max = std::max(bw_max, bw_cache);
       cout0 << "bandwidth: " << bw_max << " GiB/s max, " << bw_cache << " GiB/s recent" << std::endl;
       const double mlups_cache = double(num_gpu*nx_*ny_*nz_)* iter / timer["foo"] / 1e6f;
@@ -346,8 +349,8 @@ int main(int argc, char** argv) try {
   }
 
   const double 
-    min = *thrust::min_element(dst.data(), dst.data() + dst.size()),
-    max = *thrust::max_element(dst.data(), dst.data() + dst.size());
+    min = *thrust::min_element(thrust::device, thrust_ptr_dst, thrust_ptr_dst + dst.size()),
+    max = *thrust::max_element(thrust::device, thrust_ptr_dst, thrust_ptr_dst + dst.size());
   std::cout << "@rank " << mpirank << ": dst = " << min << " -- " << max << std::endl;
 
   timer.showall();

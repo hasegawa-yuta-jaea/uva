@@ -1,4 +1,5 @@
-PROG:=run
+PROG :=run
+N ?=2
 
 .PHONY: all clean do
 
@@ -19,7 +20,11 @@ $(PROG): unified.cu
 	nvcc unified.cu -o $(PROG) $(NVFLAGS)
 
 do: $(PROG)
-	mpirun -n 2 ./$(PROG)
+	mpirun \
+		-n $(N) \
+		-x UCX_MEMTYPE_CACHE=n \
+		--mca btl_vader_single_copy_mechanism none \
+		./run
 
 clean:
 	-rm -f $(PROG)
